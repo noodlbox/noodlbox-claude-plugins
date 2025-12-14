@@ -11,7 +11,7 @@
   "plugins": [
     {
       "name": "noodlbox",
-      "source": ".",
+      "source": "./",
       "description": "Code knowledge graph analysis - explore codebases, trace call chains, analyze refactoring impact",
       "version": "0.3.0",
       "author": {
