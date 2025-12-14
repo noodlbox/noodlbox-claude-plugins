@@ -7,7 +7,7 @@
     "url": "https://noodlbox.io"
   },
   "homepage": "https://docs.noodlbox.io",
-  "repository": "https://github.com/noodlbox/noodlbox-claude-plugin",
+  "repository": "https://github.com/noodlbox/noodlbox-claude-plugins",
   "license": "MIT",
   "keywords": [
     "code-analysis",

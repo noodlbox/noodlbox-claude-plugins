@@ -5,7 +5,7 @@ Code knowledge graph analysis for Claude Code - explore codebases, trace call ch
 ## Installation
 
 ```
-/plugin marketplace add noodlbox/noodlbox-claude-plugin
+/plugin marketplace add noodlbox/noodlbox-claude-plugins
 /plugin install noodlbox@noodlbox
 ```
 
