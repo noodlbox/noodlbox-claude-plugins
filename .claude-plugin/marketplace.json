@@ -1,0 +1,26 @@
+{
+  "name": "noodlbox",
+  "owner": {
+    "name": "Noodlbox",
+    "url": "https://noodlbox.io"
+  },
+  "metadata": {
+    "description": "Noodlbox plugin marketplace - code knowledge graph analysis tools",
+    "version": "0.3.0"
+  },
+  "plugins": [
+    {
+      "name": "noodlbox",
+      "source": ".",
+      "description": "Code knowledge graph analysis - explore codebases, trace call chains, analyze refactoring impact",
+      "version": "0.3.0",
+      "author": {
+        "name": "Noodlbox",
+        "url": "https://noodlbox.io"
+      },
+      "homepage": "https://docs.noodlbox.io",
+      "keywords": ["code-analysis", "knowledge-graph", "call-graph", "refactoring"],
+      "category": "development"
+    }
+  ]
+}

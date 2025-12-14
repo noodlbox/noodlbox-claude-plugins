@@ -1,0 +1,20 @@
+{
+  "name": "noodlbox",
+  "version": "0.3.0",
+  "description": "Code knowledge graph analysis - explore codebases, trace call chains, analyze refactoring impact",
+  "author": {
+    "name": "Noodlbox",
+    "url": "https://noodlbox.io"
+  },
+  "homepage": "https://docs.noodlbox.io",
+  "repository": "https://github.com/noodlbox/noodlbox-claude-plugin",
+  "license": "MIT",
+  "keywords": [
+    "code-analysis",
+    "knowledge-graph",
+    "call-graph",
+    "refactoring",
+    "debugging",
+    "code-exploration"
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "noodlbox": {
+      "type": "http",
+      "url": "http://localhost:9500/mcp"
+    }
+  }
+}
