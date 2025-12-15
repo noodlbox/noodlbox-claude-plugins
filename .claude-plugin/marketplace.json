@@ -6,14 +6,14 @@
   },
   "metadata": {
     "description": "Noodlbox plugin marketplace - code knowledge graph analysis tools",
-    "version": "0.3.0"
+    "version": "version.workspace = true"
   },
   "plugins": [
     {
       "name": "noodlbox",
       "source": "./",
       "description": "Code knowledge graph analysis - explore codebases, trace call chains, analyze refactoring impact",
-      "version": "0.3.0",
+      "version": "version.workspace = true",
       "author": {
         "name": "Noodlbox",
         "url": "https://noodlbox.io"
