@@ -5,166 +5,157 @@ argument-hint: [repository]
 
 # Generate Architecture Map
 
-Create a comprehensive architecture map of this codebase and save it to `ARCHITECTURE.md` with a mermaid diagram.
+Create comprehensive architecture documentation in `ARCHITECTURE/` directory with a main README and individual process files.
 
-## Step 1: Read the Map Resource
+## Step 1: Check for Labels
 
-Read the map resource to get the high-level overview:
+Look for `.noodlbox/labels.json` in the repository:
+- If exists: Use labels for module and process names
+- If missing: Suggest running `/noodlbox:init` first, or proceed with auto-generated names
 
-```
-noodlbox://$ARGUMENTS
-```
+## Step 2: Assess Scale
 
-This provides:
-- Repository stats (communities, symbols, processes)
-- Top communities with key symbols and entry points
-- Cross-community flows (how modules connect)
-
-## Step 2: Explore Key Communities
-
-For each major community from Step 1, read its details:
+Read the map resource:
 
 ```
-noodlbox://$ARGUMENTS/community/{community_id}
+@noodlbox:map://$ARGUMENTS
 ```
 
-This provides:
-- All symbols in the community with centrality scores
-- Entry points (symbols called from outside)
-- Processes (execution flows)
-- Connections to other communities
+Check `stats.communities` to determine approach:
 
-## Step 3: Trace Key Symbols
+| Communities | Strategy |
+|-------------|----------|
+| < 10 | Generate inline - full exploration |
+| >= 10 | Spawn codebase-analyst agent for isolated exploration |
 
-For high-centrality symbols identified in Steps 1-2, trace their execution flows to understand how they connect the architecture.
+## Step 3: Generate Content
 
-### 3.1: Understand Architectural Context
+### Small Codebase (< 10 communities)
 
-```cypher
-MATCH (cs:CODE_SYMBOL {name: '<symbol_name>'})
-MATCH (cs)-[:PROCESS_STEP]->(p:PROCESS)
-MATCH (p)-[:BELONGS_TO_COMMUNITY]->(c:COMMUNITY)
-RETURN p.name as process, p.centrality as process_importance,
-       c.name as community, c.size as community_size, c.cohesion
+Generate directly:
+
+1. Read each community via `@noodlbox:map://$ARGUMENTS/community/{id}`
+2. For top 3 communities by size, trace key processes
+3. Build cross-community flow data from map overview
+4. Create mermaid diagram from community connections
+
+### Large Codebase (>= 10 communities)
+
+Spawn the codebase-analyst agent:
+
+```
+Task: map_generation for $ARGUMENTS
+Input: Map overview and labels (if available)
+Output: Structured JSON with modules, processes, cross-flows
 ```
 
-### 3.2: Find Callers (Upstream)
+The agent handles scale-appropriate exploration and returns summaries.
 
-```cypher
-MATCH (caller:CODE_SYMBOL)-[:CALLS]->(cs:CODE_SYMBOL {name: '<symbol_name>'})
-RETURN caller.name, caller.kind, caller.file_path, caller.centrality
-ORDER BY caller.centrality DESC
-LIMIT 20
+## Step 4: Write ARCHITECTURE Directory
+
+Create `ARCHITECTURE/` in repository root with this structure:
+
+```
+ARCHITECTURE/
+├── README.md              # Main overview
+├── {process-slug}.md      # One file per key process
+└── ...
 ```
 
-### 3.3: Find Dependencies (Downstream)
-
-```cypher
-MATCH (cs:CODE_SYMBOL {name: '<symbol_name>'})-[:CALLS]->(called:CODE_SYMBOL)
-RETURN called.name, called.kind, called.file_path, called.centrality
-ORDER BY called.centrality DESC
-LIMIT 20
-```
-
-### 3.4: Cross-Community Dependencies
-
-```cypher
-MATCH (caller:CODE_SYMBOL)-[:CALLS]->(cs:CODE_SYMBOL {name: '<symbol_name>'})
-MATCH (caller)-[:PROCESS_STEP]->()-[:BELONGS_TO_COMMUNITY]->(c1:COMMUNITY)
-MATCH (cs)-[:PROCESS_STEP]->()-[:BELONGS_TO_COMMUNITY]->(c2:COMMUNITY)
-WHERE c1 <> c2
-RETURN c1.name as calling_from, c2.name as called_in, count(*) as calls
-```
-
-### 3.5: Multi-Hop Trace (2-3 levels)
-
-```cypher
-MATCH path = (cs:CODE_SYMBOL {name: '<symbol_name>'})-[:CALLS*1..3]->(dep:CODE_SYMBOL)
-WHERE dep.centrality > 0.5
-RETURN dep.name, dep.file_path, length(path) as depth, dep.centrality
-ORDER BY dep.centrality DESC
-LIMIT 20
-```
-
-Repeat for each key symbol to build a complete picture of the architecture.
-
-## Step 4: Write Architecture Document
-
-Create `ARCHITECTURE.md` in the repository root with this structure:
+### README.md Structure
 
 ```markdown
 # Architecture Overview
 
 ## Summary
-[Brief description of what this codebase does based on community names and key symbols]
+[Brief description based on community labels and key symbols]
 
 ## Stats
-- Communities: X
-- Symbols: X
-- Processes: X
+- **Communities**: X modules
+- **Symbols**: X functions, classes, etc.
+- **Processes**: X execution flows
 
 ## Modules
 
 ### [Community Label]
-- **Purpose**: [Inferred from key symbols and processes]
-- **Key Symbols**: [Top symbols by centrality]
-- **Entry Points**: [How other modules interact with this]
-- **Cohesion**: X.XX
+**Purpose**: [Description from labels or inferred]
+**Key Symbols**: Symbol1, Symbol2, Symbol3
+**Cohesion**: X.XX
 
 [Repeat for each major community]
 
-## Key Execution Flows
-
-### [Symbol Name]
-- **Location**: `file_path:line`
-- **Centrality**: X.XX
-- **Callers**: [List of upstream callers]
-- **Dependencies**: [List of downstream calls]
-- **Cross-Community Impact**: [Which modules this connects]
-
-[Repeat for key symbols traced in Step 3]
-
 ## Data Flows
 
-### [Flow Name]
-**From**: [Source Community] → **To**: [Target Community]
-**Call Count**: X
-[Description of what this flow does based on the symbols involved]
+| From | To | Calls | Description |
+|------|-----|-------|-------------|
+| Module A | Module B | 47 | [What this flow does] |
 
-[Repeat for significant cross-community flows]
+## Key Processes
+
+| Process | Entry Point | Description |
+|---------|-------------|-------------|
+| [Label](./process-slug.md) | FunctionName | Brief description |
 
 ## Architecture Diagram
 
 ```mermaid
 graph TB
-    subgraph ModuleName1["Community Label 1"]
-        S1[Key Symbol 1]
-        S2[Key Symbol 2]
+    subgraph Auth["Authentication System"]
+        login[login]
+        validate[validateToken]
     end
 
-    subgraph ModuleName2["Community Label 2"]
-        S3[Key Symbol 3]
-        S4[Key Symbol 4]
+    subgraph Payment["Payment Processing"]
+        checkout[checkout]
+        process[processPayment]
     end
 
-    ModuleName1 -->|X calls| ModuleName2
+    Auth -->|47 calls| Payment
 ```
 ```
 
-## Step 5: Generate Mermaid Diagram
+### Process Files
 
-Based on the cross-flows data, create a mermaid diagram showing:
-- Each community as a subgraph with a sanitized ID and label
-- Key symbols as nodes within subgraphs
-- Cross-community calls as edges with call counts
+Each `{process-slug}.md` contains:
 
-**Mermaid Tips:**
+```markdown
+# [Process Label]
+
+**Entry Point**: `FunctionName` in `src/path/to/file.ts:42`
+
+## Description
+[Description from labels or inferred from symbols]
+
+## Execution Trace
+
+1. `EntryPoint` (src/file.ts:42) - What this step does
+2. `Step2` (src/other.ts:15) - What this step does
+3. `Step3` (src/another.ts:88) - What this step does
+
+## Cross-Community Connections
+
+- Calls into: [Other Module]
+- Called from: [Another Module]
+
+## Related Processes
+
+- [Related Process 1](./related-1.md)
+- [Related Process 2](./related-2.md)
+```
+
+**Naming**: Slugify labels (e.g., "User Login Flow" → `user-login-flow.md`)
+
+## Mermaid Diagram Tips
+
 - Sanitize IDs: Replace spaces/special chars with underscores
-- Use short labels for readability
-- Use `graph TB` for top-to-bottom or `graph LR` for left-to-right
+- Use subgraphs for communities
 - Add call counts on edges: `-->|47 calls|`
-- Escape quotes in labels with `#quot;`
+- Keep labels short for readability
+- Use `graph TB` for top-to-bottom layout
 
 ## Output
 
-Save the complete architecture document to `ARCHITECTURE.md` in the repository root.
+Confirm completion with:
+- Path to ARCHITECTURE directory
+- Count of process files created
+- Link to README.md

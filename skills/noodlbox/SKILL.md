@@ -1,15 +1,43 @@
 # Noodlbox Code Analysis
 
-Noodlbox provides a code knowledge graph for deep codebase analysis.
+Noodlbox provides a code knowledge graph for deep codebase analysis. Use it to understand architecture, trace execution flows, and assess change impact.
+
+## Decision Framework
+
+**Choose your approach based on the question:**
+
+| Question Type | Start With | Then |
+|---------------|------------|------|
+| "What's the architecture?" | `@noodlbox:map://current` | Drill into communities |
+| "How does X work?" | `noodlbox_query_with_context` | Read process traces |
+| "What calls X?" | `noodlbox_raw_cypher_query` | Follow CALLS relationships |
+| "What does X depend on?" | `noodlbox_raw_cypher_query` | Trace outgoing CALLS |
+| "Is it safe to change X?" | `noodlbox_detect_impact` | Review impacted processes |
+| "Where is X defined?" | `noodlbox_query_with_context` | Navigate to file |
+| "Explore a module" | `@noodlbox:map://current/community/{id}` | Trace key processes |
+
+**Prefer Noodlbox for RELATIONSHIPS. Use grep/glob for TEXT SEARCH.**
 
 ## Getting Started
 
-**Always start by reading the repository list to get context:**
+**Always start by reading the repository list:**
 ```
 @noodlbox:repository://list
 ```
 
 This returns available repositories with their names, paths, and analysis status. Use `"current"` as the repository parameter to auto-detect from the working directory.
+
+## Scale Awareness
+
+Adapt exploration depth to codebase size:
+
+| Scale | Communities | Approach |
+|-------|-------------|----------|
+| Small | < 10 | Full exploration - examine all communities and processes |
+| Medium | 10-50 | Strategic sampling - top communities, representative processes |
+| Large | > 50 | High-level overview - architecture focus, minimal deep dives |
+
+**Why this matters:** Large codebases can have hundreds of communities. Full exploration pollutes context. Use commands like `/noodlbox:generate_map` which handle scale automatically by spawning isolated agents.
 
 ## MCP Tools
 
@@ -44,42 +72,33 @@ Reference resources using `@noodlbox:uri` syntax in Claude Code.
 | Community | `@noodlbox:map://current/community/{id}` | Symbols, entry points, processes |
 | Process | `@noodlbox:map://current/process/{id}` | Execution trace with file locations |
 
-**Note:** Use `current` as the repository name to auto-detect from the working directory. Alternatively, use the exact repository name from `@noodlbox:repository://list`.
+**Note:** Use `current` as the repository name to auto-detect from the working directory.
 
-## Workflow Pattern
+## Key Concepts
 
-1. **Get context first**: Read `@noodlbox:repository://list` to see available repos
-2. **Get the map**: Read `@noodlbox:map://current` for architecture overview
-3. **Search or query**: Use tools based on the task
-4. **Drill down**: Read community/process resources as needed
+- **Symbols** - Functions, classes, methods, variables in the code
+- **Processes** - Execution flows through the code (call chains)
+- **Communities** - Tightly-coupled symbol clusters (logical modules)
+- **Centrality** - How important a symbol is (high = many callers/callees)
+- **Cohesion** - How tightly connected a community is internally
 
-## When to Use Noodlbox
+## Labels
 
-| Question | Approach |
-|----------|----------|
-| "How does X work?" | `noodlbox_query_with_context` to find relevant processes |
-| "What calls this function?" | `noodlbox_raw_cypher_query` for incoming CALLS |
-| "What does X depend on?" | `noodlbox_raw_cypher_query` for outgoing CALLS |
-| "Is it safe to refactor X?" | `noodlbox_detect_impact` to see affected code |
-| "Where is X defined?" | `noodlbox_query_with_context` to search |
-| "What's the architecture?" | Read `@noodlbox:map://current` resource |
-| "Explore a module" | Read `@noodlbox:map://current/community/{id}` |
+If `.noodlbox/labels.json` exists, communities and processes have human-readable labels. Run `/noodlbox:init` to generate labels for a repository.
 
-## Detailed Guides
+## Cypher Reference
 
-See [WORKFLOWS.md](WORKFLOWS.md) for detailed workflow guides:
-- Code Exploration
-- Debugging
-- Refactoring
-- Impact Analysis
-
-See [CYPHER.md](CYPHER.md) for example queries.
+See [CYPHER.md](CYPHER.md) for detailed query examples covering:
+- Finding callers and callees
+- Tracing execution paths
+- Cross-community analysis
+- High-centrality symbol identification
 
 ## Setup
 
-1. Install the Noodlbox CLI: `curl -fsSL https://noodlbox.io/install.sh | sh`
-2. Analyze your repository: `noodl analyze /path/to/repo`
-3. Start the MCP server: `noodl mcp`
+1. Install: `curl -fsSL https://noodlbox.io/install.sh | sh`
+2. Analyze: `noodl analyze /path/to/repo`
+3. Start MCP: `noodl mcp`
 
 ## Documentation
 
