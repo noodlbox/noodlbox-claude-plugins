@@ -1,0 +1,28 @@
+{
+  "description": "Noodlbox hooks for semantic code search and session context",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Glob|Grep|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/noodlbox.js",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/noodlbox.js",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
