@@ -15,12 +15,71 @@ const { execFileSync } = require('child_process');
 const path = require('path');
 
 // Configuration
-const NOODL_PATH = process.env.NOODL_PATH || 'noodl';
+const NOODL_PATH = process.env.NOODLBOX_CLI_PATH || process.env.NOODL_PATH || 'noodl';
 const SEARCH_TIMEOUT_MS = 30000;
 const SESSION_TIMEOUT_MS = 10000;
 const MAX_PROCESSES = 5;
 const MAX_SYMBOLS = 10;
 const MAX_COMMAND_LENGTH = 1000; // ReDoS protection
+const DEBUG = process.env.NOODLBOX_HOOK_DEBUG === 'true';
+const CACHE_TTL_MS = 60000; // Cache results for 1 minute
+
+// Simple in-memory cache for search results
+const searchCache = new Map();
+
+function debug(...args) {
+  if (DEBUG) {
+    console.error('[noodlbox-hook]', ...args);
+  }
+}
+
+/**
+ * Get cached result or null if expired/missing
+ */
+function getCachedResult(key) {
+  const cached = searchCache.get(key);
+  if (!cached) return null;
+  if (Date.now() - cached.timestamp > CACHE_TTL_MS) {
+    searchCache.delete(key);
+    return null;
+  }
+  return cached.result;
+}
+
+/**
+ * Cache a search result
+ */
+function setCachedResult(key, result) {
+  searchCache.set(key, { result, timestamp: Date.now() });
+}
+
+/**
+ * Detect repository name in owner/repo format from git remote
+ * Falls back to just the folder name if git remote not available
+ */
+function detectRepositoryName(cwd) {
+  try {
+    // Try to get owner/repo from git remote origin
+    const remoteUrl = execFileSync(
+      'git', ['remote', 'get-url', 'origin'],
+      { cwd, encoding: 'utf-8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }
+    ).trim();
+
+    // Parse owner/repo from various URL formats:
+    // https://github.com/owner/repo.git
+    // git@github.com:owner/repo.git
+    // ssh://git@github.com/owner/repo.git
+    const match = remoteUrl.match(/[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?$/);
+    if (match) {
+      return `${match[1]}/${match[2]}`;
+    }
+  } catch {
+    // Git not available or no remote
+  }
+
+  // Fallback: just use folder name
+  return path.basename(cwd);
+}
 
 async function readInput() {
   let data = '';
@@ -31,18 +90,22 @@ async function readInput() {
 }
 
 /**
- * SessionStart handler - injects architecture context
+ * SessionStart handler - injects architecture context with actual search results
  */
 async function handleSessionStart(input) {
   const cwd = input.cwd || process.cwd();
   const source = input.source || 'startup';
 
+  debug('SessionStart:', { cwd, source });
+
   // Only inject on fresh startup, not resume/clear/compact
   if (source !== 'startup') {
+    debug('Skipping - not a fresh startup');
     return;
   }
 
   try {
+    debug('Running noodl search:', NOODL_PATH);
     const result = execFileSync(
       NOODL_PATH,
       ['search', 'main entry points core architecture', cwd, '-f', 'markdown', '--limit', '5'],
@@ -50,20 +113,25 @@ async function handleSessionStart(input) {
     );
 
     if (result && !result.includes('not indexed') && result.trim().length > 50) {
-      const repoName = path.basename(cwd);
+      const repoName = detectRepositoryName(cwd);
+      debug('Detected repository:', repoName);
       console.log(`<noodlbox-indexed-repository path="${cwd}">
 This repository has been indexed by Noodlbox for semantic code search.
 
-**Available tools:**
+## Architecture Overview
+
+${result.trim()}
+
+## Available Tools
 - mcp__plugin_noodlbox_noodlbox__noodlbox_query_with_context - Semantic code search (finds execution flows, not just files)
 - mcp__plugin_noodlbox_noodlbox__noodlbox_detect_impact - Analyze blast radius of git changes
 - mcp__plugin_noodlbox_noodlbox__noodlbox_raw_cypher_query - Direct graph queries
 
-**Available resources (read with ReadMcpResourceTool):**
-- map://${repoName} - Architecture overview with communities and key processes
+## Available Resources
+- map://${repoName} - Full architecture overview with communities and key processes
 - db://schema/${repoName} - Graph database schema
 
-**Tip:** Read the map resource first to understand codebase structure before searching.
+Use these tools and resources to navigate efficiently. The search results above show key entry points.
 </noodlbox-indexed-repository>`);
     }
   } catch {
@@ -73,23 +141,41 @@ This repository has been indexed by Noodlbox for semantic code search.
 
 /**
  * Extract search query from tool input
+ * Returns null for patterns that don't benefit from semantic search
  */
 function extractQueryFromTool(toolName, toolInput) {
   if (toolName === 'Glob') {
     const pattern = toolInput.pattern || '';
+
+    // Skip pure file extension patterns - these just list files by type
+    // Examples: **/*.py, *.js, **/*.{ts,tsx}, src/**/*.py
+    if (/^(\*\*\/|\w+\/\*\*\/)*\*\.[a-z]+$/i.test(pattern)) {
+      debug('Glob is pure extension pattern, skipping:', pattern);
+      return null;
+    }
+    if (/^(\*\*\/|\w+\/\*\*\/)*\*\.\{[a-z,]+\}$/i.test(pattern)) {
+      debug('Glob is extension group pattern, skipping:', pattern);
+      return null;
+    }
+
+    // Extract meaningful parts from pattern
     const parts = pattern
       .replace(/\*\*/g, '')
       .replace(/\*/g, '')
+      .replace(/\{[^}]+\}/g, '') // Remove brace expansions
       .split(/[\/.]/)
       .filter((p) => p && p.length > 1)
       .filter((p) => !p.startsWith('.'));
+
     return parts.length > 0 ? parts.join(' ') : null;
+
   } else if (toolName === 'Grep') {
     return (toolInput.pattern || '')
       .replace(/\\.|\[.*?\]|\(.*?\)|\{.*?\}/g, ' ')
       .replace(/[\^\$\.\|\?\+\*\\]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim() || null;
+
   } else if (toolName === 'Bash') {
     return extractQueryFromBashCommand(toolInput.command || '');
   }
@@ -149,42 +235,57 @@ async function handlePreToolUse(input) {
   const toolInput = input.tool_input || {};
   const cwd = input.cwd || process.cwd();
 
+  debug('PreToolUse:', { toolName, toolInput, cwd });
+
   // Only enhance Glob/Grep/Bash
   if (toolName !== 'Glob' && toolName !== 'Grep' && toolName !== 'Bash') {
+    debug('Not a search tool, approving');
     console.log(JSON.stringify({ decision: 'approve' }));
     return;
   }
 
   const query = extractQueryFromTool(toolName, toolInput);
+  debug('Extracted query:', query);
 
   // Skip if no meaningful query
   if (!query || query.length < 3) {
+    debug('No meaningful query, approving without context');
     console.log(JSON.stringify({ decision: 'approve' }));
     return;
   }
 
   try {
-    const result = execFileSync(
+    debug('Running noodl search:', { query, cwd });
+    const startTime = Date.now();
+    let result = execFileSync(
       NOODL_PATH,
       ['search', query, cwd, '-f', 'markdown', '--limit', String(MAX_PROCESSES), '--max-symbols', String(MAX_SYMBOLS)],
       { encoding: 'utf-8', timeout: SEARCH_TIMEOUT_MS, stdio: ['pipe', 'pipe', 'pipe'] }
     );
+    const elapsed = Date.now() - startTime;
 
     if (result && result.trim().length > 0 && !result.includes('not indexed')) {
+      // Shorten absolute paths to relative paths from cwd
+      const cwdWithSlash = cwd.endsWith('/') ? cwd : cwd + '/';
+      result = result.replaceAll(cwdWithSlash, './');
+
+      debug('Search succeeded:', { resultLength: result.length, elapsedMs: elapsed });
       // Approve with additional context
       console.log(JSON.stringify({
         decision: 'approve',
         hookSpecificOutput: {
           hookEventName: 'PreToolUse',
-          additionalContext: result.trim()
+          additionalContext: `Semantic search (${elapsed}ms):\n${result.trim()}`
         }
       }));
     } else {
       // No results or not indexed - just approve
+      debug('No results or not indexed, approving');
       console.log(JSON.stringify({ decision: 'approve' }));
     }
-  } catch {
+  } catch (error) {
     // On error, just approve without context
+    debug('Search failed:', error.message);
     console.log(JSON.stringify({ decision: 'approve' }));
   }
 }
