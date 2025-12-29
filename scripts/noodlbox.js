@@ -1,25 +1,33 @@
 #!/usr/bin/env node
 /**
- * Noodlbox Claude Code Plugin Hooks
+ * Noodlbox Claude Code Hooks
  *
  * Unified hook handler for multiple Claude Code events:
  *
  * 1. SessionStart - Injects architecture context on fresh session start
- * 2. PreToolUse (Glob/Grep) - Enhances search with semantic context
+ * 2. PreToolUse (Glob/Grep/Bash) - Uses semantic search when repo is indexed
  *
- * This script is called by Claude Code via the plugin hooks configuration.
- * It uses ${CLAUDE_PLUGIN_ROOT} to locate itself within the plugin directory.
+ * Configuration in .claude/settings.json:
+ * {
+ *   "hooks": {
+ *     "SessionStart": [{
+ *       "hooks": [{ "type": "command", "command": "node /path/to/noodlbox.js" }]
+ *     }],
+ *     "PreToolUse": [{
+ *       "matcher": "Glob|Grep|Bash",
+ *       "hooks": [{ "type": "command", "command": "node /path/to/noodlbox.js" }]
+ *     }]
+ *   }
+ * }
  */
 
 const { execFileSync } = require('child_process');
 const path = require('path');
 
 // Configuration
-const NOODL_PATH = process.env.NOODLBOX_CLI_PATH || process.env.NOODL_PATH || 'noodl';
+const NOODL_PATH = process.env.NOODLBOX_CLI_PATH || 'noodl';
 const SEARCH_TIMEOUT_MS = 30000;
 const SESSION_TIMEOUT_MS = 10000;
-const MAX_PROCESSES = 5;
-const MAX_SYMBOLS = 10;
 const MAX_COMMAND_LENGTH = 1000; // ReDoS protection
 const DEBUG = process.env.NOODLBOX_HOOK_DEBUG === 'true';
 const CACHE_TTL_MS = 60000; // Cache results for 1 minute
@@ -90,7 +98,7 @@ async function readInput() {
 }
 
 /**
- * SessionStart handler - injects architecture context with actual search results
+ * SessionStart handler - injects architecture context
  */
 async function handleSessionStart(input) {
   const cwd = input.cwd || process.cwd();
@@ -108,30 +116,27 @@ async function handleSessionStart(input) {
     debug('Running noodl search:', NOODL_PATH);
     const result = execFileSync(
       NOODL_PATH,
-      ['search', 'main entry points core architecture', cwd, '-f', 'markdown', '--limit', '5'],
+      ['search', 'main entry points core architecture', cwd, '--include-content', '--limit', '5'],
       { encoding: 'utf-8', timeout: SESSION_TIMEOUT_MS, stdio: ['pipe', 'pipe', 'pipe'] }
     );
 
     if (result && !result.includes('not indexed') && result.trim().length > 50) {
       const repoName = detectRepositoryName(cwd);
       debug('Detected repository:', repoName);
+      // Use plugin MCP server naming (mcp__plugin_noodlbox_noodlbox__)
       console.log(`<noodlbox-indexed-repository path="${cwd}">
 This repository has been indexed by Noodlbox for semantic code search.
 
-## Architecture Overview
-
-${result.trim()}
-
-## Available Tools
+**Available tools:**
 - mcp__plugin_noodlbox_noodlbox__noodlbox_query_with_context - Semantic code search (finds execution flows, not just files)
 - mcp__plugin_noodlbox_noodlbox__noodlbox_detect_impact - Analyze blast radius of git changes
 - mcp__plugin_noodlbox_noodlbox__noodlbox_raw_cypher_query - Direct graph queries
 
-## Available Resources
-- map://${repoName} - Full architecture overview with communities and key processes
+**Available resources (read with ReadMcpResourceTool):**
+- map://${repoName} - Architecture overview with communities and key processes
 - db://schema/${repoName} - Graph database schema
 
-Use these tools and resources to navigate efficiently. The search results above show key entry points.
+**Tip:** Read the map resource first to understand codebase structure before searching.
 </noodlbox-indexed-repository>`);
     }
   } catch {
@@ -228,7 +233,7 @@ function extractQueryFromBashCommand(command) {
 }
 
 /**
- * PreToolUse handler - enhances Glob/Grep/Bash with semantic context
+ * PreToolUse handler - intercepts Glob/Grep/Bash for semantic search
  */
 async function handlePreToolUse(input) {
   const toolName = input.tool_name || '';
@@ -237,20 +242,32 @@ async function handlePreToolUse(input) {
 
   debug('PreToolUse:', { toolName, toolInput, cwd });
 
-  // Only enhance Glob/Grep/Bash
+  // Only intercept Glob/Grep/Bash
   if (toolName !== 'Glob' && toolName !== 'Grep' && toolName !== 'Bash') {
-    debug('Not a search tool, approving');
-    console.log(JSON.stringify({ decision: 'approve' }));
+    debug('Not a search tool, allowing');
+    console.log(JSON.stringify({ decision: 'allow' }));
     return;
   }
 
   const query = extractQueryFromTool(toolName, toolInput);
   debug('Extracted query:', query);
 
-  // Skip if no meaningful query
+  // Skip if no meaningful query (also handles non-search Bash commands)
   if (!query || query.length < 3) {
-    debug('No meaningful query, approving without context');
-    console.log(JSON.stringify({ decision: 'approve' }));
+    debug('No meaningful query, allowing builtin');
+    console.log(JSON.stringify({ decision: 'allow' }));
+    return;
+  }
+
+  // Check cache first
+  const cacheKey = `${cwd}:${query}`;
+  const cached = getCachedResult(cacheKey);
+  if (cached) {
+    debug('Cache hit for:', query);
+    console.log(JSON.stringify({
+      decision: 'block',
+      reason: `Noodlbox semantic search for "${query}" (cached):\n\n${cached}`
+    }));
     return;
   }
 
@@ -259,34 +276,38 @@ async function handlePreToolUse(input) {
     const startTime = Date.now();
     let result = execFileSync(
       NOODL_PATH,
-      ['search', query, cwd, '-f', 'markdown', '--limit', String(MAX_PROCESSES), '--max-symbols', String(MAX_SYMBOLS)],
+      ['search', query, cwd, '--include-content', '--limit', '10'],
       { encoding: 'utf-8', timeout: SEARCH_TIMEOUT_MS, stdio: ['pipe', 'pipe', 'pipe'] }
     );
     const elapsed = Date.now() - startTime;
 
-    if (result && result.trim().length > 0 && !result.includes('not indexed')) {
-      // Shorten absolute paths to relative paths from cwd
-      const cwdWithSlash = cwd.endsWith('/') ? cwd : cwd + '/';
-      result = result.replaceAll(cwdWithSlash, './');
+    // Shorten absolute paths to relative paths from cwd
+    const cwdWithSlash = cwd.endsWith('/') ? cwd : cwd + '/';
+    result = result.replaceAll(cwdWithSlash, './');
 
-      debug('Search succeeded:', { resultLength: result.length, elapsedMs: elapsed });
-      // Approve with additional context
-      console.log(JSON.stringify({
-        decision: 'approve',
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          additionalContext: `Semantic search (${elapsed}ms):\n${result.trim()}`
-        }
-      }));
-    } else {
-      // No results or not indexed - just approve
-      debug('No results or not indexed, approving');
-      console.log(JSON.stringify({ decision: 'approve' }));
-    }
+    // Cache the result
+    setCachedResult(cacheKey, result);
+
+    debug('Search succeeded:', { resultLength: result.length, elapsedMs: elapsed });
+    // Success - return semantic search results (blocks the original tool)
+    console.log(JSON.stringify({
+      decision: 'block',
+      reason: `Noodlbox semantic search for "${query}" (${elapsed}ms):\n\n${result}`
+    }));
   } catch (error) {
-    // On error, just approve without context
-    debug('Search failed:', error.message);
-    console.log(JSON.stringify({ decision: 'approve' }));
+    const stderr = error.stderr || '';
+    debug('Search failed:', stderr.slice(0, 200));
+
+    // If repo not indexed or not found, allow builtin tool
+    if (stderr.includes('not indexed') || stderr.includes('not found')) {
+      debug('Repo not indexed, allowing builtin');
+      console.log(JSON.stringify({ decision: 'allow' }));
+      return;
+    }
+
+    // Other errors - allow fallback to builtin
+    debug('Unknown error, allowing builtin');
+    console.log(JSON.stringify({ decision: 'allow' }));
   }
 }
 
@@ -299,14 +320,14 @@ async function main() {
   } else if (hookEvent === 'PreToolUse') {
     await handlePreToolUse(input);
   } else {
-    // Unknown hook - approve by default for PreToolUse-like events
+    // Unknown hook - allow by default for PreToolUse-like events
     if (input.tool_name) {
-      console.log(JSON.stringify({ decision: 'approve' }));
+      console.log(JSON.stringify({ decision: 'allow' }));
     }
   }
 }
 
 main().catch(() => {
-  // On any error, approve (for PreToolUse) or exit silently (for SessionStart)
-  console.log(JSON.stringify({ decision: 'approve' }));
+  // On any error, allow (for PreToolUse) or exit silently (for SessionStart)
+  console.log(JSON.stringify({ decision: 'allow' }));
 });
