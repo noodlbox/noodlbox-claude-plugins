@@ -265,8 +265,11 @@ async function handlePreToolUse(input) {
   if (cached) {
     debug('Cache hit for:', query);
     console.log(JSON.stringify({
-      decision: 'block',
-      reason: `Noodlbox semantic search for "${query}" (cached):\n\n${cached}`
+      decision: 'approve',
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        additionalContext: `Noodlbox semantic search for "${query}" (cached):\n\n${cached}`
+      }
     }));
     return;
   }
@@ -289,10 +292,13 @@ async function handlePreToolUse(input) {
     setCachedResult(cacheKey, result);
 
     debug('Search succeeded:', { resultLength: result.length, elapsedMs: elapsed });
-    // Success - return semantic search results (blocks the original tool)
+    // Success - return semantic search results AND allow original tool to run
     console.log(JSON.stringify({
-      decision: 'block',
-      reason: `Noodlbox semantic search for "${query}" (${elapsed}ms):\n\n${result}`
+      decision: 'approve',
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        additionalContext: `Noodlbox semantic search for "${query}" (${elapsed}ms):\n\n${result}`
+      }
     }));
   } catch (error) {
     const stderr = error.stderr || '';
