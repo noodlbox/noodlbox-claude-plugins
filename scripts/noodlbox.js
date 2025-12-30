@@ -26,7 +26,7 @@ const path = require('path');
 
 // Configuration
 const NOODL_PATH = process.env.NOODLBOX_CLI_PATH || 'noodl';
-const SEARCH_TIMEOUT_MS = 30000;
+const SEARCH_TIMEOUT_MS = 10000; // Reduced to 10s to avoid hook timeout issues
 const SESSION_TIMEOUT_MS = 10000;
 const MAX_COMMAND_LENGTH = 1000; // ReDoS protection
 const DEBUG = process.env.NOODLBOX_HOOK_DEBUG === 'true';
@@ -257,7 +257,7 @@ async function handlePreToolUse(input) {
   // Only intercept Glob/Grep/Bash
   if (toolName !== 'Glob' && toolName !== 'Grep' && toolName !== 'Bash') {
     debug('Not a search tool, allowing');
-    console.log(JSON.stringify({ decision: 'allow' }));
+    // Empty output = allow (don't output anything for non-intercepted tools)
     return;
   }
 
@@ -267,7 +267,7 @@ async function handlePreToolUse(input) {
   // Skip if no meaningful query (also handles non-search Bash commands)
   if (!query || query.length < 3) {
     debug('No meaningful query, allowing builtin');
-    console.log(JSON.stringify({ decision: 'allow' }));
+    // Empty output = allow
     return;
   }
 
@@ -277,9 +277,9 @@ async function handlePreToolUse(input) {
   if (cached) {
     debug('Cache hit for:', query);
     console.log(JSON.stringify({
-      decision: 'approve',
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
+        permissionDecision: 'allow',
         additionalContext: `Noodlbox semantic search for "${query}" (cached):\n\n${cached}`
       }
     }));
@@ -306,26 +306,29 @@ async function handlePreToolUse(input) {
     debug('Search succeeded:', { resultLength: result.length, elapsedMs: elapsed });
     // Success - return semantic search results AND allow original tool to run
     console.log(JSON.stringify({
-      decision: 'approve',
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
+        permissionDecision: 'allow',
         additionalContext: `Noodlbox semantic search for "${query}" (${elapsed}ms):\n\n${result}`
       }
     }));
   } catch (error) {
     const stderr = error.stderr || '';
-    debug('Search failed:', stderr.slice(0, 200));
+    const stdout = error.stdout || '';
+    debug('Search failed:', stderr.slice(0, 200), stdout.slice(0, 200));
 
-    // If repo not indexed or not found, allow builtin tool
-    if (stderr.includes('not indexed') || stderr.includes('not found')) {
+    // If repo not indexed or not found, allow builtin tool (check both stderr and stdout)
+    if (stderr.includes('not indexed') || stderr.includes('not found') ||
+        stdout.includes('not indexed') || stdout.includes('not found') ||
+        stdout.includes('No analyzed repository')) {
       debug('Repo not indexed, allowing builtin');
-      console.log(JSON.stringify({ decision: 'allow' }));
+      // Empty output = allow
       return;
     }
 
     // Other errors - allow fallback to builtin
     debug('Unknown error, allowing builtin');
-    console.log(JSON.stringify({ decision: 'allow' }));
+    // Empty output = allow
   }
 }
 
@@ -337,15 +340,10 @@ async function main() {
     await handleSessionStart(input);
   } else if (hookEvent === 'PreToolUse') {
     await handlePreToolUse(input);
-  } else {
-    // Unknown hook - allow by default for PreToolUse-like events
-    if (input.tool_name) {
-      console.log(JSON.stringify({ decision: 'allow' }));
-    }
   }
+  // Unknown hooks or non-PreToolUse events: empty output = allow
 }
 
 main().catch(() => {
-  // On any error, allow (for PreToolUse) or exit silently (for SessionStart)
-  console.log(JSON.stringify({ decision: 'allow' }));
+  // On any error, exit silently (empty output = allow for PreToolUse)
 });
