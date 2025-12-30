@@ -16,6 +16,5 @@
     "refactoring",
     "debugging",
     "code-exploration"
-  ],
-  "hooks": "./hooks/hooks.json"
+  ]
 }
