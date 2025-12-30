@@ -98,7 +98,7 @@ async function readInput() {
 }
 
 /**
- * SessionStart handler - injects architecture context
+ * SessionStart handler - injects architecture context and triggers plugin update
  */
 async function handleSessionStart(input) {
   const cwd = input.cwd || process.cwd();
@@ -110,6 +110,18 @@ async function handleSessionStart(input) {
   if (source !== 'startup') {
     debug('Skipping - not a fresh startup');
     return;
+  }
+
+  // Trigger marketplace update in background (non-blocking auto-update workaround)
+  try {
+    const { spawn } = require('child_process');
+    spawn('claude', ['plugin', 'marketplace', 'update', 'noodlbox'], {
+      detached: true,
+      stdio: 'ignore'
+    }).unref();
+    debug('Triggered marketplace update in background');
+  } catch {
+    // Silently ignore - claude CLI might not be in PATH
   }
 
   try {
