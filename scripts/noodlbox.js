@@ -156,13 +156,12 @@ async function readInput() {
 }
 
 /**
- * SessionStart handler - injects architecture context and triggers plugin update
+ * SessionStart handler - lists available repositories
  */
 async function handleSessionStart(input) {
-  const cwd = input.cwd || process.cwd();
   const source = input.source || 'startup';
 
-  debug('SessionStart:', { cwd, source });
+  debug('SessionStart:', { source });
 
   // Only inject on fresh startup, not resume/clear/compact
   if (source !== 'startup') {
@@ -182,35 +181,22 @@ async function handleSessionStart(input) {
     // Silently ignore - claude CLI might not be in PATH
   }
 
+  // Run noodl list to show available repositories
   try {
-    debug('Running noodl search:', NOODL_PATH);
+    debug('Running noodl list:', NOODL_PATH);
     const result = execFileSync(
       NOODL_PATH,
-      ['search', 'main entry points core architecture', cwd, '--include-content', '--limit', '5'],
+      ['list'],
       { encoding: 'utf-8', timeout: SESSION_TIMEOUT_MS, stdio: ['pipe', 'pipe', 'pipe'] }
     );
 
-    if (result && !result.includes('not indexed') && result.trim().length > 50) {
-      const repoName = detectRepositoryName(cwd);
-      debug('Detected repository:', repoName);
-      // Use plugin MCP server naming (mcp__plugin_noodlbox_noodlbox__)
-      console.log(`<noodlbox-indexed-repository path="${cwd}">
-This repository has been indexed by Noodlbox for semantic code search.
-
-**Available tools:**
-- mcp__plugin_noodlbox_noodlbox__noodlbox_query_with_context - Semantic code search (finds execution flows, not just files)
-- mcp__plugin_noodlbox_noodlbox__noodlbox_detect_impact - Analyze blast radius of git changes
-- mcp__plugin_noodlbox_noodlbox__noodlbox_raw_cypher_query - Direct graph queries
-
-**Available resources (read with ReadMcpResourceTool):**
-- map://${repoName} - Architecture overview with communities and key processes
-- db://schema/${repoName} - Graph database schema
-
-**Tip:** Read the map resource first to understand codebase structure before searching.
-</noodlbox-indexed-repository>`);
+    if (result && result.trim().length > 0) {
+      console.log(`<noodlbox-repositories>
+${result.trim()}
+</noodlbox-repositories>`);
     }
   } catch {
-    // Silently exit - repo not indexed or noodl not available
+    // Silently exit - noodl not available or not authenticated
   }
 }
 
