@@ -22,18 +22,20 @@
  */
 
 const { execFileSync } = require('child_process');
+const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 // Configuration
 const NOODL_PATH = process.env.NOODLBOX_CLI_PATH || 'noodl';
-const SEARCH_TIMEOUT_MS = 10000; // Reduced to 10s to avoid hook timeout issues
+const SEARCH_TIMEOUT_MS = 5000; // 5s max for search
 const SESSION_TIMEOUT_MS = 10000;
 const MAX_COMMAND_LENGTH = 1000; // ReDoS protection
 const DEBUG = process.env.NOODLBOX_HOOK_DEBUG === 'true';
-const CACHE_TTL_MS = 60000; // Cache results for 1 minute
 
-// Simple in-memory cache for search results
-const searchCache = new Map();
+// Cache configuration (matches Rust CacheService)
+const CACHE_FILE = path.join(os.homedir(), '.noodlbox', 'cache', 'repositories.json');
+const CACHE_TTL_MS = 600_000; // 10 minutes in milliseconds
 
 function debug(...args) {
   if (DEBUG) {
@@ -42,23 +44,79 @@ function debug(...args) {
 }
 
 /**
- * Get cached result or null if expired/missing
+ * Check if cwd is in an indexed repository using local cache.
+ *
+ * Cache format (CacheEntry<RepositoryCache>):
+ * {
+ *   "data": {
+ *     "repositories": [{ "id", "name", "full_name", "source_path", "indexed" }],
+ *     "path_index": { "/path/to/repo": 0 },
+ *     "id_index": { "repo-id": 0 }
+ *   },
+ *   "cached_at": 1234567890000
+ * }
+ *
+ * Returns:
+ * - RepoInfo object if cwd is in an indexed repo
+ * - false if cwd is definitely NOT in an indexed repo
+ * - null if unknown (cache missing/stale/error) - should fallback to noodl search
  */
-function getCachedResult(key) {
-  const cached = searchCache.get(key);
-  if (!cached) return null;
-  if (Date.now() - cached.timestamp > CACHE_TTL_MS) {
-    searchCache.delete(key);
-    return null;
-  }
-  return cached.result;
-}
+function getIndexedRepoInfo(cwd) {
+  try {
+    if (!fs.existsSync(CACHE_FILE)) {
+      debug('Cache file does not exist');
+      return null;
+    }
 
-/**
- * Cache a search result
- */
-function setCachedResult(key, result) {
-  searchCache.set(key, { result, timestamp: Date.now() });
+    const entry = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf-8'));
+
+    // Check cache freshness (cached_at is in milliseconds)
+    if (Date.now() - entry.cached_at > CACHE_TTL_MS) {
+      debug('Cache is stale');
+      return null;
+    }
+
+    const cache = entry.data;
+    if (!cache || !cache.repositories || !cache.path_index) {
+      debug('Invalid cache format');
+      return null;
+    }
+
+    // Try exact match in path_index first (fast path)
+    if (cache.path_index[cwd] !== undefined) {
+      const repo = cache.repositories[cache.path_index[cwd]];
+      if (repo) {
+        debug('Found repo in cache (exact match):', { source_path: repo.source_path, indexed: repo.indexed });
+        return repo.indexed ? {
+          repository_id: repo.id,
+          repository_name: repo.full_name,
+          indexed: repo.indexed
+        } : false;
+      }
+    }
+
+    // Try prefix match (cwd is inside a repo)
+    for (const [sourcePath, idx] of Object.entries(cache.path_index)) {
+      if (cwd.startsWith(sourcePath + '/')) {
+        const repo = cache.repositories[idx];
+        if (repo) {
+          debug('Found repo in cache (prefix match):', { source_path: sourcePath, indexed: repo.indexed });
+          return repo.indexed ? {
+            repository_id: repo.id,
+            repository_name: repo.full_name,
+            indexed: repo.indexed
+          } : false;
+        }
+      }
+    }
+
+    // Not in any known repo = definitely not indexed
+    debug('cwd not in any cached repo');
+    return false;
+  } catch (e) {
+    debug('Cache read error:', e.message);
+    return null; // Error = unknown, fallback to noodl search
+  }
 }
 
 /**
@@ -271,20 +329,14 @@ async function handlePreToolUse(input) {
     return;
   }
 
-  // Check cache first
-  const cacheKey = `${cwd}:${query}`;
-  const cached = getCachedResult(cacheKey);
-  if (cached) {
-    debug('Cache hit for:', query);
-    console.log(JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'allow',
-        additionalContext: `Noodlbox semantic search for "${query}" (cached):\n\n${cached}`
-      }
-    }));
+  // Check cache first - skip noodl search entirely if repo is not indexed
+  const repoInfo = getIndexedRepoInfo(cwd);
+  if (repoInfo === false) {
+    // Definitely not indexed - skip noodl search entirely (~1ms vs ~600ms)
+    debug('Repo not indexed (from cache), allowing builtin');
     return;
   }
+  // repoInfo is null (unknown) or truthy (indexed) - proceed with noodl search
 
   try {
     debug('Running noodl search:', { query, cwd });
@@ -299,9 +351,6 @@ async function handlePreToolUse(input) {
     // Shorten absolute paths to relative paths from cwd
     const cwdWithSlash = cwd.endsWith('/') ? cwd : cwd + '/';
     result = result.replaceAll(cwdWithSlash, './');
-
-    // Cache the result
-    setCachedResult(cacheKey, result);
 
     debug('Search succeeded:', { resultLength: result.length, elapsedMs: elapsed });
     // Success - return semantic search results AND allow original tool to run
