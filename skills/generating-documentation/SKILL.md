@@ -1,11 +1,10 @@
 ---
 name: generating-documentation
 description: >-
-  Provides architecture documentation generation from code knowledge graph.
-  Ideal for creating ARCHITECTURE.md, generating codebase maps, or labeling
-  communities and processes. Triggers include "document the architecture",
-  "create architecture map", "generate labels", "describe the codebase",
-  "create README for this code".
+  Generate architecture documentation, create codebase maps, document code
+  structure. Create ARCHITECTURE.md, generate mermaid diagrams, label modules
+  and processes, write READMEs describing the codebase. NOT for exploring code
+  (use exploring-codebases) or planning changes (use change-planning).
 metadata:
   author: noodlbox
   version: "{{VERSION}}"

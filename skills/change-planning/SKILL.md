@@ -1,10 +1,10 @@
 ---
 name: change-planning
 description: >-
-  Helps plan and validate code changes by analyzing their impact on the codebase.
-  Ideal for pre-commit review, PR risk assessment, or planning safe refactors.
-  Triggers include "what will this break", "is this safe to commit", "blast radius",
-  "before I merge", "review my changes", "plan this refactor".
+  Analyze blast radius, check what will break, review changes before commit. Use
+  for pre-commit review, PR risk assessment, planning safe refactors, or checking
+  if changes are safe to merge. NOT for debugging (use debugging) or exploring
+  unfamiliar code (use exploring-codebases).
 metadata:
   author: noodlbox
   version: "{{VERSION}}"

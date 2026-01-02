@@ -1,11 +1,10 @@
 ---
 name: exploring-codebases
 description: >-
-  Provides semantic code exploration using knowledge graph navigation.
-  Ideal for understanding unfamiliar repositories, discovering architecture,
-  or finding code by intent rather than exact text. Triggers include
-  "how does X work", "explore this codebase", "what is the architecture",
-  "find where X happens", "understand this repo".
+  Explore codebase, understand architecture, find how things work. Navigate
+  unfamiliar repositories, discover code structure, find where functionality
+  lives by intent rather than exact text. NOT for debugging failures (use
+  debugging) or checking change impact (use change-planning).
 metadata:
   author: noodlbox
   version: "{{VERSION}}"

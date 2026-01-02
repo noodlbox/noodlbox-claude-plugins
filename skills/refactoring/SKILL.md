@@ -1,10 +1,10 @@
 ---
 name: refactoring
 description: >-
-  Helps plan and execute safe refactoring by understanding code dependencies.
-  Ideal for renaming symbols, extracting modules, splitting services, or
-  deprecating APIs. Triggers include "refactor", "rename", "extract", "split",
-  "move this code", "deprecate", "what depends on this".
+  Refactor code, rename symbols, extract modules, split services. Plan safe
+  refactoring by mapping dependencies, find what depends on code before moving
+  or deprecating APIs. NOT for quick change impact (use change-planning) or
+  debugging failures (use debugging).
 metadata:
   author: noodlbox
   version: "{{VERSION}}"

@@ -1,10 +1,10 @@
 ---
 name: debugging
 description: >-
-  Helps investigate and fix bugs by tracing execution paths and finding root causes.
-  Ideal for understanding why code fails, tracing error origins, or investigating
-  unexpected behavior. Triggers include "why is this failing", "debug this error",
-  "trace the bug", "troubleshoot", "find root cause", "why does X return wrong value".
+  Debug errors, trace bugs, find root causes. Investigate why code fails, trace
+  execution paths, troubleshoot unexpected behavior, find why functions return
+  wrong values. NOT for exploring unfamiliar code (use exploring-codebases) or
+  planning changes (use change-planning).
 metadata:
   author: noodlbox
   version: "{{VERSION}}"
