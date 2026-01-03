@@ -9,7 +9,7 @@
 
 const path = require('path');
 const { execFileSync } = require('child_process');
-const lib = require(path.join(__dirname, '../../../shared/hooks/lib.js'));
+const lib = require(path.join(__dirname, '../shared/hooks/lib.js'));
 
 const SCHEMA_TIMEOUT_MS = 5000;
 
