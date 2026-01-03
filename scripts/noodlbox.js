@@ -8,15 +8,10 @@
  */
 
 const path = require('path');
+const { execFileSync } = require('child_process');
 const lib = require(path.join(__dirname, '../../../shared/hooks/lib.js'));
 
-async function readInput() {
-  let data = '';
-  for await (const chunk of process.stdin) {
-    data += chunk;
-  }
-  return JSON.parse(data);
-}
+const SCHEMA_TIMEOUT_MS = 5000;
 
 /**
  * Extract search query from tool input
@@ -66,11 +61,11 @@ async function handleSessionStart(input) {
 
   // Run noodl schema to show database schema (static, same for all repos)
   try {
-    debug('Running noodl schema:', NOODL_PATH);
+    lib.debug('Running noodl schema:', lib.NOODL_PATH);
     const schemaResult = execFileSync(
-      NOODL_PATH,
+      lib.NOODL_PATH,
       ['schema'],
-      { encoding: 'utf-8', timeout: SESSION_TIMEOUT_MS, stdio: ['pipe', 'pipe', 'pipe'] }
+      { encoding: 'utf-8', timeout: SCHEMA_TIMEOUT_MS, stdio: ['pipe', 'pipe', 'pipe'] }
     );
 
     if (schemaResult && schemaResult.trim().length > 0) {
@@ -131,7 +126,7 @@ async function handlePreToolUse(input) {
 }
 
 async function main() {
-  const input = await readInput();
+  const input = await lib.readInput();
   const hookEvent = input.hook_event_name || '';
 
   if (hookEvent === 'SessionStart') {
