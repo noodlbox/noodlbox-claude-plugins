@@ -198,6 +198,24 @@ ${result.trim()}
   } catch {
     // Silently exit - noodl not available or not authenticated
   }
+
+  // Run noodl schema to show database schema (static, same for all repos)
+  try {
+    debug('Running noodl schema:', NOODL_PATH);
+    const schemaResult = execFileSync(
+      NOODL_PATH,
+      ['schema'],
+      { encoding: 'utf-8', timeout: SESSION_TIMEOUT_MS, stdio: ['pipe', 'pipe', 'pipe'] }
+    );
+
+    if (schemaResult && schemaResult.trim().length > 0) {
+      console.log(`<noodlbox-schema>
+${schemaResult.trim()}
+</noodlbox-schema>`);
+    }
+  } catch {
+    // Silently ignore - schema not critical for startup
+  }
 }
 
 /**
