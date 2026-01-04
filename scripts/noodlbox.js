@@ -7,8 +7,9 @@
  * 2. PreToolUse (Glob/Grep/Bash) - Augments with semantic search
  */
 
+const path = require('path');
 const { execFileSync } = require('child_process');
-const lib = require('@noodlbox/shared/hooks/lib');
+const lib = require(path.join(__dirname, '../shared/hooks/lib.js'));
 
 const SCHEMA_TIMEOUT_MS = 5000;
 
