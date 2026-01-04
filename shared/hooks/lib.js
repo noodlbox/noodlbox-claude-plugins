@@ -33,14 +33,17 @@ function debug(...args) {
 }
 
 /**
- * Read JSON input from stdin.
+ * Read JSON input from stdin synchronously.
+ * More reliable than async iteration for CLI hooks.
  */
-async function readInput() {
-  let data = '';
-  for await (const chunk of process.stdin) {
-    data += chunk;
+function readInput() {
+  try {
+    const data = fs.readFileSync(0, 'utf-8');
+    return JSON.parse(data);
+  } catch (e) {
+    debug('Failed to read stdin:', e.message);
+    return {};
   }
-  return JSON.parse(data);
 }
 
 /**

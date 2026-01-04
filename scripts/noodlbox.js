@@ -30,7 +30,7 @@ function extractQueryFromTool(toolName, toolInput) {
 /**
  * SessionStart handler - lists available repositories
  */
-async function handleSessionStart(input) {
+function handleSessionStart(input) {
   const source = input.source || 'startup';
 
   lib.debug('SessionStart:', { source });
@@ -81,7 +81,7 @@ ${schemaResult.trim()}
 /**
  * PreToolUse handler - intercepts Glob/Grep/Bash for semantic search
  */
-async function handlePreToolUse(input) {
+function handlePreToolUse(input) {
   const toolName = input.tool_name || '';
   const toolInput = input.tool_input || {};
   const cwd = input.cwd || process.cwd();
@@ -125,17 +125,20 @@ async function handlePreToolUse(input) {
   // On failure, empty output = allow fallback
 }
 
-async function main() {
-  const input = await lib.readInput();
-  const hookEvent = input.hook_event_name || '';
+function main() {
+  try {
+    const input = lib.readInput();
+    const hookEvent = input.hook_event_name || '';
 
-  if (hookEvent === 'SessionStart') {
-    await handleSessionStart(input);
-  } else if (hookEvent === 'PreToolUse') {
-    await handlePreToolUse(input);
+    if (hookEvent === 'SessionStart') {
+      handleSessionStart(input);
+    } else if (hookEvent === 'PreToolUse') {
+      handlePreToolUse(input);
+    }
+  } catch (e) {
+    lib.debug('Hook error:', e.message);
+    // Exit silently on any error
   }
 }
 
-main().catch(() => {
-  // On any error, exit silently
-});
+main();
