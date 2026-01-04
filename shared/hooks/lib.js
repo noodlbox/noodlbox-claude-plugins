@@ -8,7 +8,6 @@ const { execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { parse: parseShell } = require('shell-quote');
 
 const NOODL_PATH = process.env.NOODLBOX_CLI_PATH || 'noodl';
 const SEARCH_TIMEOUT_MS = 5000;
@@ -21,26 +20,82 @@ const CACHE_TTL_MS = 600_000; // 10 minutes
 // Search commands we intercept
 const SEARCH_COMMANDS = new Set(['grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'find']);
 
-// Flags that take a value (next arg is not the pattern)
-const FLAGS_WITH_VALUES = new Set([
-  // grep
+// Flags that take a value (next arg is not the pattern) - per command
+const GREP_FLAGS_WITH_VALUES = new Set([
   '-e', '-f', '-m', '-A', '-B', '-C', '-D', '-d', '--include', '--exclude',
-  '--exclude-dir', '--include-dir', '--label', '--line-buffered',
-  // rg
+  '--exclude-dir', '--include-dir', '--label',
+]);
+
+const RG_FLAGS_WITH_VALUES = new Set([
+  '-e', '-f', '-m', '-A', '-B', '-C',
   '-g', '--glob', '-t', '--type', '-T', '--type-not', '--max-count',
   '--max-depth', '--max-filesize', '-j', '--threads', '-M', '--max-columns',
   '--context-separator', '--field-context-separator', '--path-separator',
   '-r', '--replace', '--pre', '--pre-glob', '--engine',
-  // find
-  '-name', '-iname', '-path', '-ipath', '-regex', '-iregex',
-  '-type', '-size', '-mtime', '-atime', '-ctime', '-user', '-group',
-  '-perm', '-newer', '-exec', '-execdir', '-ok', '-okdir',
+]);
+
+const AG_ACK_FLAGS_WITH_VALUES = new Set([
+  '-A', '-B', '-C', '-G', '--ignore-dir', '-g',
 ]);
 
 function debug(...args) {
   if (DEBUG) {
     console.error('[noodlbox-hook]', ...args);
   }
+}
+
+/**
+ * Simple shell command tokenizer.
+ * Handles single/double quotes and basic escaping.
+ * No external dependencies.
+ */
+function tokenize(command) {
+  const tokens = [];
+  let current = '';
+  let inSingle = false;
+  let inDouble = false;
+  let escape = false;
+
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+
+    if (escape) {
+      current += c;
+      escape = false;
+      continue;
+    }
+
+    if (c === '\\' && !inSingle) {
+      escape = true;
+      continue;
+    }
+
+    if (c === "'" && !inDouble) {
+      inSingle = !inSingle;
+      continue;
+    }
+
+    if (c === '"' && !inSingle) {
+      inDouble = !inDouble;
+      continue;
+    }
+
+    if (!inSingle && !inDouble && /\s/.test(c)) {
+      if (current) {
+        tokens.push(current);
+        current = '';
+      }
+      continue;
+    }
+
+    current += c;
+  }
+
+  if (current) {
+    tokens.push(current);
+  }
+
+  return tokens;
 }
 
 /**
@@ -175,7 +230,7 @@ function extractQueryFromGrep(pattern) {
 
 /**
  * Extract search pattern from shell commands (grep, rg, find, ag, ack).
- * Uses shell-quote for proper parsing instead of fragile regex.
+ * Uses simple tokenizer for proper parsing without external dependencies.
  */
 function extractQueryFromBash(command) {
   if (!command || typeof command !== 'string' || command.length > MAX_COMMAND_LENGTH) {
@@ -183,26 +238,21 @@ function extractQueryFromBash(command) {
   }
 
   try {
-    const tokens = parseShell(command);
+    const tokens = tokenize(command);
+    if (tokens.length === 0) return null;
 
-    // Find the base command (handle pipes, env vars, etc.)
+    // Find the base command (skip env vars like VAR=value)
     let cmdIndex = 0;
     for (let i = 0; i < tokens.length; i++) {
-      const token = tokens[i];
-      // Skip operators and find actual command
-      if (typeof token === 'string' && !token.includes('=')) {
+      if (!tokens[i].includes('=')) {
         cmdIndex = i;
         break;
       }
-      // Skip shell-quote operator objects
-      if (typeof token === 'object') continue;
     }
 
-    const baseCmd = typeof tokens[cmdIndex] === 'string'
-      ? path.basename(tokens[cmdIndex])
-      : null;
+    const baseCmd = path.basename(tokens[cmdIndex]);
 
-    if (!baseCmd || !SEARCH_COMMANDS.has(baseCmd)) {
+    if (!SEARCH_COMMANDS.has(baseCmd)) {
       return null;
     }
 
@@ -212,7 +262,7 @@ function extractQueryFromBash(command) {
     if (baseCmd === 'find') {
       return extractFindPattern(tokens, cmdIndex);
     } else {
-      return extractGrepPattern(tokens, cmdIndex);
+      return extractGrepPattern(tokens, cmdIndex, baseCmd);
     }
   } catch (e) {
     debug('Shell parse error:', e.message);
@@ -224,14 +274,21 @@ function extractQueryFromBash(command) {
  * Extract pattern from grep/rg/ag/ack commands.
  * Pattern is typically the first non-flag, non-flag-value argument.
  */
-function extractGrepPattern(tokens, startIndex) {
+function extractGrepPattern(tokens, startIndex, cmd) {
+  // Select appropriate flag set based on command
+  let flagsWithValues;
+  if (cmd === 'rg') {
+    flagsWithValues = RG_FLAGS_WITH_VALUES;
+  } else if (cmd === 'ag' || cmd === 'ack') {
+    flagsWithValues = AG_ACK_FLAGS_WITH_VALUES;
+  } else {
+    flagsWithValues = GREP_FLAGS_WITH_VALUES;
+  }
+
   let skipNext = false;
 
   for (let i = startIndex + 1; i < tokens.length; i++) {
     const token = tokens[i];
-
-    // Skip non-string tokens (operators from shell-quote)
-    if (typeof token !== 'string') continue;
 
     // Skip if previous was a flag that takes a value
     if (skipNext) {
@@ -242,18 +299,15 @@ function extractGrepPattern(tokens, startIndex) {
     // Check if this is a flag
     if (token.startsWith('-')) {
       // Check if it's a flag that takes a value
-      if (FLAGS_WITH_VALUES.has(token)) {
+      if (flagsWithValues.has(token)) {
         skipNext = true;
       }
       // Handle -e pattern (explicit pattern flag)
       if (token === '-e' && i + 1 < tokens.length) {
-        const pattern = tokens[i + 1];
-        if (typeof pattern === 'string') {
-          const cleaned = cleanRegexPattern(pattern);
-          if (cleaned && cleaned.length >= 3) {
-            debug('Found -e pattern:', cleaned);
-            return cleaned;
-          }
+        const cleaned = cleanRegexPattern(tokens[i + 1]);
+        if (cleaned && cleaned.length >= 3) {
+          debug('Found -e pattern:', cleaned);
+          return cleaned;
         }
       }
       continue;
@@ -280,23 +334,19 @@ function extractFindPattern(tokens, startIndex) {
   for (let i = startIndex + 1; i < tokens.length; i++) {
     const token = tokens[i];
 
-    if (typeof token !== 'string') continue;
-
     if (patternFlags.has(token) && i + 1 < tokens.length) {
       const pattern = tokens[i + 1];
-      if (typeof pattern === 'string') {
-        // For find, extract meaningful parts from glob patterns
-        const cleaned = pattern
-          .replace(/^\*+/, '')
-          .replace(/\*+$/, '')
-          .replace(/\*+/g, ' ')
-          .replace(/\.[a-z]+$/i, '') // Remove file extensions
-          .trim();
+      // For find, extract meaningful parts from glob patterns
+      const cleaned = pattern
+        .replace(/^\*+/, '')
+        .replace(/\*+$/, '')
+        .replace(/\*+/g, ' ')
+        .replace(/\.[a-z]+$/i, '') // Remove file extensions
+        .trim();
 
-        if (cleaned && cleaned.length >= 3) {
-          debug('Found find pattern:', cleaned);
-          return cleaned;
-        }
+      if (cleaned && cleaned.length >= 3) {
+        debug('Found find pattern:', cleaned);
+        return cleaned;
       }
     }
   }
