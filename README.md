@@ -4,9 +4,9 @@ Code knowledge graph analysis for Claude Code - explore codebases, trace call ch
 
 ## Installation
 
-```
-/plugin marketplace add noodlbox/noodlbox-claude-plugins
-/plugin install noodlbox@noodlbox
+```bash
+claude plugin marketplace add noodlbox/noodlbox-claude-plugins
+claude plugin install noodlbox@noodlbox
 ```
 
 ## Features
@@ -20,14 +20,16 @@ Connects to the noodlbox MCP server for knowledge graph queries.
 - **Refactoring analysis** - Understand impact before changes
 
 ### Slash Commands
-- `/generate_map` - Generate architecture map with mermaid diagram (includes symbol tracing)
-- `/detect_impact_of_current_changes` - Analyze git changes impact
+- `/noodlbox:generate_map` - Generate architecture map with mermaid diagram
+- `/noodlbox:detect_impact` - Analyze git changes impact
+- `/noodlbox:init` - Initialize human-readable labels (experimental)
 
 ## Prerequisites
 
 1. Install noodlbox CLI: https://docs.noodlbox.io/getting-started/installation
 2. Analyze your repository: `noodl analyze /path/to/repo`
-3. Start the MCP server: `noodl mcp`
+
+The MCP server is launched automatically by Claude Code.
 
 ## Documentation
 

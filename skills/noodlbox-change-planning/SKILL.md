@@ -1,5 +1,5 @@
 ---
-name: change-planning
+name: noodlbox-change-planning
 description: >-
   Analyze blast radius, check what will break, review changes before commit. Use
   for pre-commit review, PR risk assessment, planning safe refactors, or checking

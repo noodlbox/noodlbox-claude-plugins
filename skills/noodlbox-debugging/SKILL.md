@@ -1,5 +1,5 @@
 ---
-name: debugging
+name: noodlbox-debugging
 description: >-
   Debug errors, trace bugs, find root causes. Investigate why code fails, trace
   execution paths, troubleshoot unexpected behavior, find why functions return

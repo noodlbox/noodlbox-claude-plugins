@@ -1,5 +1,5 @@
 ---
-name: refactoring
+name: noodlbox-refactoring
 description: >-
   Refactor code, rename symbols, extract modules, split services. Plan safe
   refactoring by mapping dependencies, find what depends on code before moving

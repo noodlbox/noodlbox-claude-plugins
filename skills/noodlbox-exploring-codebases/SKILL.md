@@ -1,5 +1,5 @@
 ---
-name: exploring-codebases
+name: noodlbox-exploring-codebases
 description: >-
   Explore codebase, understand architecture, find how things work. Navigate
   unfamiliar repositories, discover code structure, find where functionality

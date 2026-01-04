@@ -1,5 +1,5 @@
 ---
-name: generating-documentation
+name: noodlbox-generating-documentation
 description: >-
   Generate architecture documentation, create codebase maps, document code
   structure. Create ARCHITECTURE.md, generate mermaid diagrams, label modules
