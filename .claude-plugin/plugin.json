@@ -1,6 +1,6 @@
 {
   "name": "noodlbox",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Code knowledge graph analysis - explore codebases, trace call chains, analyze refactoring impact",
   "author": {
     "name": "Noodlbox",
