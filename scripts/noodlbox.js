@@ -5,6 +5,7 @@
  * Unified hook handler for Claude Code events:
  * 1. SessionStart - Lists available repositories on fresh session start
  * 2. PreToolUse (Glob/Grep/Bash) - Augments with semantic search
+ * 3. PostToolUse (query_with_context) - Formats MCP results for humans
  */
 
 const path = require('path');
@@ -12,6 +13,9 @@ const { execFileSync } = require('child_process');
 const lib = require(path.join(__dirname, '../shared/hooks/lib.js'));
 
 const SCHEMA_TIMEOUT_MS = 5000;
+
+// ANSI colors for branding
+const BRAND = '\x1b[38;5;39m[noodlbox]\x1b[0m'; // Blue
 
 /**
  * Extract search query from tool input
@@ -41,6 +45,8 @@ function handleSessionStart(input) {
     return;
   }
 
+  lib.debug('Initializing session...');
+
   // Trigger marketplace update in background
   try {
     const { spawn } = require('child_process');
@@ -55,8 +61,11 @@ function handleSessionStart(input) {
 
   // List available repositories
   const repoList = lib.listRepositories();
+  let contextParts = [];
+
   if (repoList) {
-    console.log(`<noodlbox-repositories>\n${repoList}\n</noodlbox-repositories>`);
+    contextParts.push(`<noodlbox-repositories>\n${repoList}\n</noodlbox-repositories>`);
+    lib.debug('Loaded indexed repositories');
   }
 
   // Run noodl schema to show database schema (static, same for all repos)
@@ -69,12 +78,21 @@ function handleSessionStart(input) {
     );
 
     if (schemaResult && schemaResult.trim().length > 0) {
-      console.log(`<noodlbox-schema>
-${schemaResult.trim()}
-</noodlbox-schema>`);
+      contextParts.push(`<noodlbox-schema>\n${schemaResult.trim()}\n</noodlbox-schema>`);
     }
   } catch {
     // Silently ignore - schema not critical for startup
+  }
+
+  // Output with systemMessage for user visibility
+  if (contextParts.length > 0) {
+    console.log(JSON.stringify({
+      systemMessage: `${BRAND} Session initialized with indexed repositories`,
+      hookSpecificOutput: {
+        hookEventName: 'SessionStart',
+        additionalContext: contextParts.join('\n\n')
+      }
+    }));
   }
 }
 
@@ -110,19 +128,72 @@ function handlePreToolUse(input) {
   }
 
   // Run semantic search
+  lib.debug(`Semantic search: "${query}"`);
   const searchResult = lib.runNoodlSearch(query, cwd);
 
   if (searchResult.success) {
+    lib.debug(`Found results in ${searchResult.elapsed}ms`);
+
+    // Parse results for rich user message
+    const searchInfo = lib.parseSearchResults(searchResult.result);
+    const userMessage = lib.formatSearchMessage(query, searchInfo, searchResult.elapsed);
+
     // Output Claude format
     console.log(JSON.stringify({
+      systemMessage: `\n${BRAND} ${userMessage}`,
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'allow',
-        additionalContext: `Noodlbox semantic search for "${query}" (${searchResult.elapsed}ms):\n\n${searchResult.result}`
+        additionalContext: `Noodlbox search for "${query}":\n${searchResult.result}`
       }
     }));
   }
   // On failure, empty output = allow fallback
+}
+
+/**
+ * PostToolUse handler - formats noodlbox MCP tool results for humans
+ */
+function handlePostToolUse(input) {
+  const toolName = input.tool_name || '';
+  const toolResponse = input.tool_response || '';
+
+  lib.debug('PostToolUse:', { toolName });
+
+  // Only handle noodlbox query_with_context (MCP tools: mcp__<server>__<tool>)
+  if (!toolName.includes('query_with_context')) {
+    return;
+  }
+
+  // tool_response can be string or object with result field
+  let resultText;
+  if (typeof toolResponse === 'string') {
+    resultText = toolResponse;
+  } else if (toolResponse.result) {
+    resultText = typeof toolResponse.result === 'string'
+      ? toolResponse.result
+      : JSON.stringify(toolResponse.result);
+  } else {
+    resultText = JSON.stringify(toolResponse);
+  }
+
+  // Parse and format the result
+  const searchInfo = lib.parseSearchResults(resultText);
+
+  // Extract query from tool input if available
+  const query = input.tool_input?.q || input.tool_input?.query || 'query';
+  const userMessage = lib.formatSearchMessage(query, searchInfo, 0);
+
+  // Output formatted results if we have entry points
+  if (searchInfo.entryPoints && searchInfo.entryPoints.size > 0) {
+    console.log(JSON.stringify({
+      systemMessage: `\n${BRAND} ${userMessage}`,
+      hookSpecificOutput: {
+        hookEventName: 'PostToolUse',
+        additionalContext: `Noodlbox search for "${query}":\n${userMessage}`
+      }
+    }));
+  }
 }
 
 function main() {
@@ -134,6 +205,8 @@ function main() {
       handleSessionStart(input);
     } else if (hookEvent === 'PreToolUse') {
       handlePreToolUse(input);
+    } else if (hookEvent === 'PostToolUse') {
+      handlePostToolUse(input);
     }
   } catch (e) {
     lib.debug('Hook error:', e.message);
