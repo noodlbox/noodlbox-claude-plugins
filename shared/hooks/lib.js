@@ -241,57 +241,28 @@ function parseTextResults(resultText) {
 }
 
 /**
- * Format a flow continuation as arrow chain.
+ * Format a single flow as an arrow chain.
+ * Returns: "→ symbol1 → symbol2 → symbol3"
  */
-function formatFlowContinuation(symbols) {
-  const { yellow, white, reset } = colors;
-  const arrow = `${white} → ${reset}`;
-  const coloredSymbols = symbols.map(s => `${yellow}${s}${reset}`);
-  return coloredSymbols.join(arrow);
-}
-
-/**
- * Build a trie (prefix tree) from flows for merging common paths.
- */
-function buildFlowTrie(flows) {
-  const root = { children: new Map(), isEnd: false };
-
-  for (const flow of flows) {
-    let node = root;
-    for (const symbol of flow) {
-      if (!node.children.has(symbol)) {
-        node.children.set(symbol, { children: new Map(), isEnd: false });
-      }
-      node = node.children.get(symbol);
-    }
-    node.isEnd = true;
-  }
-
-  return root;
-}
-
-/**
- * Render a trie as indented lines.
- */
-function renderTrie(node, formatSymbol, depth = 1, lines = []) {
+function formatFlowChain(flow, formatSymbol) {
   const { white, reset } = colors;
-  const indent = '    '.repeat(depth);
+  if (!flow || flow.length === 0) return '';
 
-  for (const [symbol, child] of node.children) {
-    const symbolStr = formatSymbol(symbol);
-    lines.push(`${indent}${white}→${reset} ${symbolStr}`);
-    renderTrie(child, formatSymbol, depth + 1, lines);
-  }
-
-  return lines;
+  const parts = flow.map(s => formatSymbol(s));
+  return `${white}→${reset} ${parts.join(` ${white}→${reset} `)}`;
 }
 
 /**
  * Build flow display grouped by entry points.
- * Shows entry point with ◆, then nested call hierarchy below.
+ * Shows entry point with ◆, then each flow as a separate arrow chain.
+ *
+ * Format:
+ * ◆ EntryPoint
+ *   → callee1 → callee2 → callee3
+ *   → callee1 → callee2 → callee4
  */
-function buildFlowDisplay(entryPoints, symbols, totalFlows, ftsMatches) {
-  const { green, yellow, magenta, gray, white, reset } = colors;
+function buildFlowDisplay(entryPoints, symbols, ftsMatches) {
+  const { green, yellow, magenta, gray, reset } = colors;
 
   // Format symbol name - green for search hits, yellow for flow symbols
   const formatSymbol = (name) => {
@@ -301,10 +272,11 @@ function buildFlowDisplay(entryPoints, symbols, totalFlows, ftsMatches) {
     return `${yellow}${name}${reset}`;
   };
 
-  // Show entry points with their flows as a merged trie
+  // Show entry points with their flows as separate arrow chains
   if (entryPoints && entryPoints.size > 0) {
     const lines = [];
-    const maxEntryPoints = 10;
+    const maxEntryPoints = 12;
+    const maxFlowsPerEntry = 6;
     let entryCount = 0;
 
     for (const [entryPoint, flows] of entryPoints) {
@@ -315,15 +287,23 @@ function buildFlowDisplay(entryPoints, symbols, totalFlows, ftsMatches) {
       const entryDisplay = formatSymbol(entryPoint);
       lines.push(`${magenta}◆${reset} ${entryDisplay}`);
 
-      // Build trie from flows and render as nested tree
+      // Show each flow as a separate arrow chain
       if (flows.length > 0) {
-        const trie = buildFlowTrie(flows);
-        renderTrie(trie, formatSymbol, 1, lines);
+        const flowsToShow = flows.slice(0, maxFlowsPerEntry);
+        for (const flow of flowsToShow) {
+          const chainStr = formatFlowChain(flow, formatSymbol);
+          if (chainStr) {
+            lines.push(`  ${chainStr}`);
+          }
+        }
+        if (flows.length > maxFlowsPerEntry) {
+          lines.push(`  ${gray}... +${flows.length - maxFlowsPerEntry} more flows${reset}`);
+        }
       }
     }
 
     if (entryPoints.size > maxEntryPoints) {
-      lines.push(`${gray}  ... +${entryPoints.size - maxEntryPoints} more entry points${reset}`);
+      lines.push(`${gray}... +${entryPoints.size - maxEntryPoints} more entry points${reset}`);
     }
 
     return lines.join('\n');
@@ -336,20 +316,6 @@ function buildFlowDisplay(entryPoints, symbols, totalFlows, ftsMatches) {
   }
 
   return '';
-}
-
-/**
- * Format flow continuation with FTS match highlighting.
- */
-function formatFlowContinuationWithFts(flow, ftsMatches) {
-  const { green, yellow, white, reset } = colors;
-
-  return flow.map(name => {
-    if (ftsMatches && ftsMatches.has(name)) {
-      return `${green}${name}${reset}`;
-    }
-    return `${yellow}${name}${reset}`;
-  }).join(`${white} → ${reset}`);
 }
 
 /**
@@ -380,7 +346,7 @@ function formatSearchMessage(query, info, elapsed) {
     header = `Search: "${displayQuery}"${timeStr}`;
   }
 
-  const flowDisplay = buildFlowDisplay(info.entryPoints, info.symbols, info.totalFlows, info.ftsMatches);
+  const flowDisplay = buildFlowDisplay(info.entryPoints, info.symbols, info.ftsMatches);
 
   if (flowDisplay) {
     // Add separators and legend
