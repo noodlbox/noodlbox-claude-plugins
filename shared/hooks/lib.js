@@ -681,7 +681,7 @@ function runNoodlSearch(query, cwd) {
     const startTime = Date.now();
     let result = execFileSync(
       NOODL_PATH,
-      ['search', query, cwd, '--include-content', '--limit', '50', '-f', 'json'],
+      ['search', query, cwd, '--limit', '50', '-f', 'json'],
       { encoding: 'utf-8', timeout: SEARCH_TIMEOUT_MS, stdio: ['pipe', 'pipe', 'pipe'] }
     );
     const elapsed = Date.now() - startTime;
