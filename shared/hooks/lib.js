@@ -456,6 +456,17 @@ function cleanRegexPattern(pattern) {
  */
 function getIndexedRepoInfo(cwd) {
   try {
+    // Resolve symlinks to match how noodl stores paths (e.g., /var -> /private/var on macOS)
+    let resolvedCwd = cwd;
+    try {
+      resolvedCwd = fs.realpathSync(cwd);
+      if (resolvedCwd !== cwd) {
+        debug('Resolved symlink:', { from: cwd, to: resolvedCwd });
+      }
+    } catch {
+      // If realpath fails (e.g., path doesn't exist), use original cwd
+    }
+
     if (!fs.existsSync(CACHE_FILE)) {
       debug('Cache file does not exist');
       return null;
@@ -474,9 +485,9 @@ function getIndexedRepoInfo(cwd) {
       return null;
     }
 
-    // Exact match
-    if (cache.path_index[cwd] !== undefined) {
-      const repo = cache.repositories[cache.path_index[cwd]];
+    // Exact match (using resolved path)
+    if (cache.path_index[resolvedCwd] !== undefined) {
+      const repo = cache.repositories[cache.path_index[resolvedCwd]];
       if (repo) {
         debug('Found repo in cache (exact match):', { source_path: repo.source_path, indexed: repo.indexed });
         return repo.indexed ? {
@@ -487,9 +498,9 @@ function getIndexedRepoInfo(cwd) {
       }
     }
 
-    // Prefix match (cwd is inside a repo)
+    // Prefix match (resolvedCwd is inside a repo)
     for (const [sourcePath, idx] of Object.entries(cache.path_index)) {
-      if (cwd.startsWith(sourcePath + '/')) {
+      if (resolvedCwd.startsWith(sourcePath + '/')) {
         const repo = cache.repositories[idx];
         if (repo) {
           debug('Found repo in cache (prefix match):', { source_path: sourcePath, indexed: repo.indexed });
@@ -678,17 +689,26 @@ function extractFindPattern(tokens, startIndex) {
  */
 function runNoodlSearch(query, cwd) {
   try {
+    // Resolve symlinks to match how noodl stores paths (e.g., /var -> /private/var on macOS)
+    let resolvedCwd = cwd;
+    try {
+      resolvedCwd = fs.realpathSync(cwd);
+    } catch {
+      // If realpath fails, use original cwd
+    }
+
     const startTime = Date.now();
     let result = execFileSync(
       NOODL_PATH,
-      ['search', query, cwd, '--limit', '50', '-f', 'json'],
+      ['search', query, resolvedCwd, '--limit', '50', '-f', 'json'],
       { encoding: 'utf-8', timeout: SEARCH_TIMEOUT_MS, stdio: ['pipe', 'pipe', 'pipe'] }
     );
     const elapsed = Date.now() - startTime;
 
-    // Shorten absolute paths to relative
+    // Shorten absolute paths to relative (handle both original and resolved paths)
+    const resolvedCwdWithSlash = resolvedCwd.endsWith('/') ? resolvedCwd : resolvedCwd + '/';
     const cwdWithSlash = cwd.endsWith('/') ? cwd : cwd + '/';
-    result = result.replaceAll(cwdWithSlash, './');
+    result = result.replaceAll(resolvedCwdWithSlash, './').replaceAll(cwdWithSlash, './');
 
     debug('Search succeeded:', { resultLength: result.length, elapsedMs: elapsed });
     return { success: true, result, elapsed };
