@@ -16,12 +16,6 @@ Create architecture documentation from the code knowledge graph.
 
 ## Available Workflows
 
-### /noodlbox:init
-
-Generate human-readable labels for communities and processes.
-
-Creates `.noodlbox/labels.json` with descriptive names.
-
 ### /noodlbox:generate_map
 
 Generate comprehensive architecture documentation.
@@ -33,23 +27,11 @@ Creates `ARCHITECTURE/` directory with:
 ## Quick Start
 
 ```
-1. Check for labels: Look for .noodlbox/labels.json
-2. If missing: Run /noodlbox:init first
-3. Then: Run /noodlbox:generate_map
+1. Check for labels: Look for .noodlbox/labels.json (optional, can be created manually)
+2. Run /noodlbox:generate_map
 ```
 
 ## Workflow Checklist
-
-### Generate Labels
-
-```
-Label Generation:
-- [ ] Read map://current for community list
-- [ ] For each community, identify purpose
-- [ ] Generate descriptive labels
-- [ ] Create .noodlbox/labels.json
-- [ ] Verify labels make sense
-```
 
 ### Generate Architecture Map
 
@@ -119,31 +101,27 @@ For complete templates, see [templates.md](templates.md).
 ```
 Step 1: Check for existing labels
 Look for .noodlbox/labels.json
-→ Not found
+→ Not found (will use auto-generated names)
 
-Step 2: Generate labels first
-Run /noodlbox:init
-→ Created .noodlbox/labels.json with 15 community labels
-
-Step 3: Read overview
+Step 2: Read overview
 READ map://current
 → 15 communities, 2400 symbols, 890 processes
 → Top communities: PaymentProcessing, UserAuthentication, DataAccess
 
-Step 4: Explore key communities
+Step 3: Explore key communities
 READ map://current/community/{payment-id}
 → Key symbols: validatePayment, processCharge
 → Entry points: handlePaymentRequest
 → 12 processes
 
-Step 5: Generate README
+Step 4: Generate README
 Write ARCHITECTURE/README.md with:
 - Summary from community analysis
 - Stats from map
 - Data flows from cross_flows
 - Mermaid diagram from communities
 
-Step 6: Generate process files
+Step 5: Generate process files
 For each key process:
 - Read map://current/process/{id}
 - Write ARCHITECTURE/{process-slug}.md
@@ -151,8 +129,7 @@ For each key process:
 
 **Checklist**:
 ```
-- [x] Check for .noodlbox/labels.json (not found)
-- [x] Generate labels (/noodlbox:init)
+- [x] Check for .noodlbox/labels.json (not found, using auto-generated names)
 - [x] Read map overview (15 communities)
 - [x] Drill into top communities
 - [x] Generate mermaid diagram
