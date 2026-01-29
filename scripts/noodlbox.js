@@ -98,11 +98,20 @@ function handleSessionStart(input) {
 
 /**
  * PreToolUse handler - intercepts Glob/Grep/Bash for semantic search
+ * Only runs for indexed repos - exits immediately otherwise.
  */
 function handlePreToolUse(input) {
+  const cwd = input.cwd || process.cwd();
+
+  // Check if repo is indexed FIRST - exit immediately if not
+  const repoInfo = lib.getIndexedRepoInfo(cwd);
+  if (repoInfo === false || repoInfo === null) {
+    lib.debug('Repo not indexed, skipping');
+    return;
+  }
+
   const toolName = input.tool_name || '';
   const toolInput = input.tool_input || {};
-  const cwd = input.cwd || process.cwd();
 
   lib.debug('PreToolUse:', { toolName, toolInput, cwd });
 
@@ -117,13 +126,6 @@ function handlePreToolUse(input) {
 
   if (!query || query.length < 3) {
     lib.debug('No meaningful query, allowing builtin');
-    return;
-  }
-
-  // Check cache first
-  const repoInfo = lib.getIndexedRepoInfo(cwd);
-  if (repoInfo === false) {
-    lib.debug('Repo not indexed (from cache), allowing builtin');
     return;
   }
 
