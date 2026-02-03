@@ -9,10 +9,28 @@
  */
 
 const path = require('path');
+const fs = require('fs');
 const { execFileSync } = require('child_process');
 const lib = require(path.join(__dirname, '../shared/hooks/lib.js'));
 
 const SCHEMA_TIMEOUT_MS = 5000;
+
+// Path to AGENTS.md content (shared across all platforms)
+const AGENTS_MD_PATH = path.join(__dirname, '../shared/skills/noodlbox-setup/references/AGENTS.md');
+
+/**
+ * Load AGENTS.md content, stripping YAML frontmatter
+ */
+function loadAgentsMdContent() {
+  try {
+    const content = fs.readFileSync(AGENTS_MD_PATH, 'utf-8');
+    // Strip YAML frontmatter (everything between --- markers at start)
+    const stripped = content.replace(/^---[\s\S]*?---\n*/m, '');
+    return stripped.trim();
+  } catch {
+    return null;
+  }
+}
 
 // ANSI colors for branding
 const BRAND = '\x1b[38;5;39m[noodlbox]\x1b[0m'; // Blue
@@ -32,7 +50,7 @@ function extractQueryFromTool(toolName, toolInput) {
 }
 
 /**
- * SessionStart handler - lists available repositories
+ * SessionStart handler - injects Noodlbox context and lists available repositories
  */
 function handleSessionStart(input) {
   const source = input.source || 'startup';
@@ -59,10 +77,17 @@ function handleSessionStart(input) {
     // Silently ignore
   }
 
-  // List available repositories
-  const repoList = lib.listRepositories();
   let contextParts = [];
 
+  // Load AGENTS.md content (core Noodlbox documentation)
+  const agentsMd = loadAgentsMdContent();
+  if (agentsMd) {
+    contextParts.push(`<noodlbox-context>\n${agentsMd}\n</noodlbox-context>`);
+    lib.debug('Loaded Noodlbox context from AGENTS.md');
+  }
+
+  // List available repositories
+  const repoList = lib.listRepositories();
   if (repoList) {
     contextParts.push(`<noodlbox-repositories>\n${repoList}\n</noodlbox-repositories>`);
     lib.debug('Loaded indexed repositories');
@@ -87,7 +112,7 @@ function handleSessionStart(input) {
   // Output with systemMessage for user visibility
   if (contextParts.length > 0) {
     console.log(JSON.stringify({
-      systemMessage: `${BRAND} Session initialized with indexed repositories`,
+      systemMessage: `${BRAND} Session initialized`,
       hookSpecificOutput: {
         hookEventName: 'SessionStart',
         additionalContext: contextParts.join('\n\n')

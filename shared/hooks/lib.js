@@ -81,10 +81,16 @@ function parseSearchResults(resultText) {
   try {
     const jsonData = typeof resultText === 'string' ? JSON.parse(resultText) : resultText;
     // Check for various JSON structures:
-    // - { results: [...] }
-    // - { result: { results: [...] } }
+    // - NEW: { processes: [...], symbols: [...] }
+    // - NEW: { result: { processes: [...], symbols: [...] } }
+    // - OLD: { results: [...] }
+    // - OLD: { result: { results: [...] } }
     // - Array directly
-    if (jsonData && (jsonData.results || jsonData.result?.results || Array.isArray(jsonData))) {
+    if (jsonData && (
+      jsonData.processes || jsonData.result?.processes ||  // New structure
+      jsonData.results || jsonData.result?.results ||      // Old structure
+      Array.isArray(jsonData)
+    )) {
       return parseJsonResults(jsonData);
     }
   } catch {
@@ -98,8 +104,9 @@ function parseSearchResults(resultText) {
 /**
  * Parse JSON format results from MCP tool.
  * Structure can be:
- * - { results: [{ symbols: [...] }] }
- * - { result: { results: [{ process: { symbols: [...] } }] } }
+ * - NEW: { result: { processes: [...], symbols: [...] } } - symbols linked by process_id
+ * - OLD: { results: [{ symbols: [...] }] }
+ * - OLD: { result: { results: [{ process: { symbols: [...] } }] } }
  */
 function parseJsonResults(jsonData) {
   const info = {
@@ -108,7 +115,13 @@ function parseJsonResults(jsonData) {
     totalFlows: 0,
   };
 
-  // Handle nested result wrapper: { result: { results: [...] } }
+  // Check for new structure: { result: { processes, symbols } }
+  const resultObj = jsonData.result || jsonData;
+  if (resultObj.processes && resultObj.symbols) {
+    return parseNewJsonFormat(resultObj);
+  }
+
+  // Handle old nested result wrapper: { result: { results: [...] } }
   let resultsArray = jsonData.results;
   if (!resultsArray && jsonData.result?.results) {
     resultsArray = jsonData.result.results;
@@ -181,6 +194,89 @@ function parseJsonResults(jsonData) {
   info.symbols = Array.from(allSymbols.keys()).slice(0, 50);
   info.ftsMatches = ftsMatches;
   info.ftsMatchCount = ftsMatchCount;
+  return info;
+}
+
+/**
+ * Parse new JSON format where symbols are in a flat array linked by process_id.
+ * Structure: { processes: [...], symbols: [...], documents: [...] }
+ */
+function parseNewJsonFormat(data) {
+  const info = {
+    entryPoints: new Map(),
+    symbols: [],
+    totalFlows: 0,
+  };
+
+  const processes = data.processes || [];
+  const symbols = data.symbols || [];
+
+  if (processes.length === 0 && symbols.length === 0) return info;
+
+  // Group symbols by process_id
+  const symbolsByProcess = new Map();
+  const ftsMatches = new Set();
+  const allSymbols = new Map();
+
+  for (const sym of symbols) {
+    const processId = sym.process_id;
+    if (!symbolsByProcess.has(processId)) {
+      symbolsByProcess.set(processId, []);
+    }
+    symbolsByProcess.get(processId).push(sym);
+
+    // Track FTS matches
+    if (sym.is_fts_match && sym.name) {
+      ftsMatches.add(sym.name);
+    }
+
+    // Track all symbols
+    if (sym.name && !allSymbols.has(sym.name)) {
+      allSymbols.set(sym.name, true);
+    }
+  }
+
+  // Build entry points from processes
+  for (const process of processes) {
+    const processSymbols = symbolsByProcess.get(process.id) || [];
+
+    if (processSymbols.length >= 1) {
+      // Sort by step_index to get execution order
+      const sortedSymbols = [...processSymbols].sort((a, b) =>
+        (a.step_index || 0) - (b.step_index || 0)
+      );
+
+      // Extract symbol names in order
+      const symbolNames = sortedSymbols
+        .map(s => s.name)
+        .filter(name => typeof name === 'string' && name.length > 2);
+
+      if (symbolNames.length >= 1) {
+        const entryPoint = symbolNames[0];
+        const flow = symbolNames.slice(1, 5); // Rest of the flow (cap at 4)
+
+        if (!info.entryPoints.has(entryPoint)) {
+          info.entryPoints.set(entryPoint, []);
+        }
+
+        // Add flow if not duplicate
+        if (flow.length > 0) {
+          const flowKey = flow.join('→');
+          const existing = info.entryPoints.get(entryPoint);
+          if (!existing.some(f => f.join('→') === flowKey)) {
+            existing.push(flow);
+            info.totalFlows++;
+          }
+        } else {
+          info.totalFlows++;
+        }
+      }
+    }
+  }
+
+  info.symbols = Array.from(allSymbols.keys()).slice(0, 50);
+  info.ftsMatches = ftsMatches;
+  info.ftsMatchCount = ftsMatches.size;
   return info;
 }
 

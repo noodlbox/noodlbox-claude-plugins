@@ -14,6 +14,11 @@ claude plugin install noodlbox@noodlbox
 ### MCP Server
 Connects to the noodlbox MCP server for knowledge graph queries.
 
+**Capabilities:**
+- Tools: Cypher queries, semantic search, impact detection
+- Resources: Repository list, schema, codebase maps
+- Logging: Structured log notifications during operations
+
 ### Skills
 - **Exploration workflows** - Systematic codebase discovery
 - **Debugging guides** - Trace issues through call chains
