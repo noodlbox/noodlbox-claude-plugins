@@ -33,6 +33,8 @@ Check `repository://list` to see if a repository is already indexed.
 - `noodlbox_query_with_context` - Natural language search returning processes
 - `noodlbox_search_documents` - Search documentation with semantic/hybrid search
 - `noodlbox_detect_impact` - Analyze git changes blast radius
+- `noodlbox_symbol_context` - Get detailed symbol info (edges, signature, centrality)
+- `noodlbox_rename_symbol` - Rename a symbol across the codebase
 
 ## MCP Resources
 

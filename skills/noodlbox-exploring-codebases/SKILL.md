@@ -20,6 +20,7 @@ Semantic code exploration that returns **processes** (execution flows) instead o
 1. READ map://current              → Get codebase overview (~200 tokens)
 2. READ map://current/community/{id} → Drill into relevant module
 3. noodlbox_query_with_context     → Search for specific concepts
+4. noodlbox_symbol_context         → Deep-dive into a specific symbol
 ```
 
 ## Workflow Checklist
@@ -63,6 +64,22 @@ Process: "Payment validation starting with validatePayment"
 ```
 
 **Start with `limit: 3-5`**. Increase only if needed.
+
+### noodlbox_symbol_context
+
+Deep-dive into a specific symbol to see its edges, signature, and centrality.
+
+```
+noodlbox_symbol_context(
+  repository: "current",
+  symbol_name: "validatePayment",
+  file_path: "src/payments/validator.ts"
+)
+```
+
+**Response** is a tagged enum:
+- `status: "found"` -- symbol detail with `signature` (always included), `centrality_score` (optional float), incoming/outgoing edges (deduplicated by target, CONTAINS edges have real line numbers). File paths are relative to repo root.
+- `status: "ambiguous"` -- multiple matches; returns `candidates` array with `uid`, `name`, `kind`, `file_path`, `line`. Re-call with `file_path` to disambiguate.
 
 ## Resources
 

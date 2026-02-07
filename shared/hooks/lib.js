@@ -55,23 +55,26 @@ function log(message) {
 // ANSI color codes
 const colors = {
   reset: '\x1b[0m',
-  white: '\x1b[97m',        // bright white for arrows
+  white: '\x1b[97m',        // bright white for arrows/headers
   dim: '\x1b[2m',           // dimmed secondary info
-  green: '\x1b[32m',        // search hits (found/match)
-  yellow: '\x1b[33m',       // flow symbols
+  green: '\x1b[32m',        // search hits (FTS matches)
+  yellow: '\x1b[33m',       // augmented symbols (non-FTS)
   magenta: '\x1b[35m',      // entry point diamonds
+  cyan: '\x1b[36m',         // definitions and docs
   gray: '\x1b[90m',         // separator, secondary text
 };
 
 /**
  * Parse noodl search results to extract execution flows grouped by entry point.
  * Handles both text format (from noodl search CLI) and JSON format (from MCP).
- * Returns: { entryPoints, symbols }
+ * Returns: { flows, definitions, documents, ftsMatches }
  */
 function parseSearchResults(resultText) {
   const info = {
-    entryPoints: new Map(), // entryPoint -> [flows]
-    symbols: [],
+    flows: new Map(),
+    definitions: [],
+    documents: [],
+    ftsMatches: new Set(),
     totalFlows: 0,
   };
 
@@ -81,8 +84,8 @@ function parseSearchResults(resultText) {
   try {
     const jsonData = typeof resultText === 'string' ? JSON.parse(resultText) : resultText;
     // Check for various JSON structures:
-    // - NEW: { processes: [...], symbols: [...] }
-    // - NEW: { result: { processes: [...], symbols: [...] } }
+    // - NEW: { processes: [...], process_symbols: [...] }
+    // - NEW: { result: { processes: [...], process_symbols: [...] } }
     // - OLD: { results: [...] }
     // - OLD: { result: { results: [...] } }
     // - Array directly
@@ -104,20 +107,24 @@ function parseSearchResults(resultText) {
 /**
  * Parse JSON format results from MCP tool.
  * Structure can be:
- * - NEW: { result: { processes: [...], symbols: [...] } } - symbols linked by process_id
+ * - NEW: { result: { processes: [...], process_symbols: [...] } } - MCP query_with_context format
+ * - ALT: { result: { processes: [...], symbols: [...] } } - symbols linked by process_id
  * - OLD: { results: [{ symbols: [...] }] }
  * - OLD: { result: { results: [{ process: { symbols: [...] } }] } }
  */
 function parseJsonResults(jsonData) {
   const info = {
-    entryPoints: new Map(),
-    symbols: [],
+    flows: new Map(),
+    definitions: [],
+    documents: [],
+    ftsMatches: new Set(),
     totalFlows: 0,
   };
 
-  // Check for new structure: { result: { processes, symbols } }
+  // Check for new structure: { result: { processes, process_symbols|symbols } }
   const resultObj = jsonData.result || jsonData;
-  if (resultObj.processes && resultObj.symbols) {
+  // MCP returns 'process_symbols', CLI returns 'symbols' - support both
+  if (resultObj.processes && (resultObj.process_symbols || resultObj.symbols)) {
     return parseNewJsonFormat(resultObj);
   }
 
@@ -132,12 +139,6 @@ function parseJsonResults(jsonData) {
 
   if (!Array.isArray(resultsArray)) return info;
 
-  const allSymbols = new Map();
-
-  // Track which symbols are FTS matches
-  const ftsMatches = new Set();
-  let ftsMatchCount = 0;
-
   for (const result of resultsArray) {
     // Symbols can be at result.symbols or result.process.symbols
     const symbols = result.symbols || result.process?.symbols || [];
@@ -151,8 +152,7 @@ function parseJsonResults(jsonData) {
       // Track FTS matches
       for (const s of sortedSymbols) {
         if (s.is_fts_match && s.name) {
-          ftsMatches.add(s.name);
-          ftsMatchCount++;
+          info.ftsMatches.add(s.name);
         }
       }
 
@@ -165,14 +165,14 @@ function parseJsonResults(jsonData) {
         const entryPoint = symbolNames[0];
         const flow = symbolNames.slice(1, 5); // Rest of the flow (cap at 4 more)
 
-        if (!info.entryPoints.has(entryPoint)) {
-          info.entryPoints.set(entryPoint, []);
+        if (!info.flows.has(entryPoint)) {
+          info.flows.set(entryPoint, []);
         }
 
         // Add flow if not duplicate (or if single symbol entry point)
         if (flow.length > 0) {
           const flowKey = flow.join('→');
-          const existing = info.entryPoints.get(entryPoint);
+          const existing = info.flows.get(entryPoint);
           if (!existing.some(f => f.join('→') === flowKey)) {
             existing.push(flow);
             info.totalFlows++;
@@ -180,63 +180,63 @@ function parseJsonResults(jsonData) {
         } else {
           info.totalFlows++;
         }
-
-        // Track all symbols
-        for (const name of symbolNames) {
-          if (!allSymbols.has(name)) {
-            allSymbols.set(name, true);
-          }
-        }
       }
     }
   }
 
-  info.symbols = Array.from(allSymbols.keys()).slice(0, 50);
-  info.ftsMatches = ftsMatches;
-  info.ftsMatchCount = ftsMatchCount;
   return info;
 }
 
 /**
  * Parse new JSON format where symbols are in a flat array linked by process_id.
- * Structure: { processes: [...], symbols: [...], documents: [...] }
+ * Structure: { processes: [...], process_symbols|symbols: [...], definitions: [...], documents: [...] }
+ * MCP query_with_context returns 'process_symbols', CLI returns 'symbols'
+ *
+ * Returns separate collections:
+ * - flows: Map of entry point → flow chains (from processes)
+ * - definitions: Array of standalone definition names
+ * - documents: Array of document titles/paths
  */
 function parseNewJsonFormat(data) {
   const info = {
-    entryPoints: new Map(),
-    symbols: [],
+    flows: new Map(),        // Entry point → [flow chains] (from processes only)
+    definitions: [],         // Standalone definition names
+    documents: [],           // Document titles/paths
+    ftsMatches: new Set(),
     totalFlows: 0,
   };
 
   const processes = data.processes || [];
-  const symbols = data.symbols || [];
+  // MCP returns 'process_symbols', CLI returns 'symbols' - support both
+  const symbols = data.process_symbols || data.symbols || [];
+  // MCP returns 'definitions' - standalone symbols not in any process
+  const definitions = data.definitions || [];
+  // MCP returns 'documents' - matched documentation
+  const documents = data.documents || [];
 
-  if (processes.length === 0 && symbols.length === 0) return info;
+  if (processes.length === 0 && symbols.length === 0 && definitions.length === 0 && documents.length === 0) {
+    return info;
+  }
 
   // Group symbols by process_id
   const symbolsByProcess = new Map();
-  const ftsMatches = new Set();
-  const allSymbols = new Map();
 
   for (const sym of symbols) {
     const processId = sym.process_id;
-    if (!symbolsByProcess.has(processId)) {
-      symbolsByProcess.set(processId, []);
+    if (processId) {
+      if (!symbolsByProcess.has(processId)) {
+        symbolsByProcess.set(processId, []);
+      }
+      symbolsByProcess.get(processId).push(sym);
     }
-    symbolsByProcess.get(processId).push(sym);
 
     // Track FTS matches
     if (sym.is_fts_match && sym.name) {
-      ftsMatches.add(sym.name);
-    }
-
-    // Track all symbols
-    if (sym.name && !allSymbols.has(sym.name)) {
-      allSymbols.set(sym.name, true);
+      info.ftsMatches.add(sym.name);
     }
   }
 
-  // Build entry points from processes
+  // Build flows from processes (entry point → chain)
   for (const process of processes) {
     const processSymbols = symbolsByProcess.get(process.id) || [];
 
@@ -255,14 +255,14 @@ function parseNewJsonFormat(data) {
         const entryPoint = symbolNames[0];
         const flow = symbolNames.slice(1, 5); // Rest of the flow (cap at 4)
 
-        if (!info.entryPoints.has(entryPoint)) {
-          info.entryPoints.set(entryPoint, []);
+        if (!info.flows.has(entryPoint)) {
+          info.flows.set(entryPoint, []);
         }
 
         // Add flow if not duplicate
         if (flow.length > 0) {
           const flowKey = flow.join('→');
-          const existing = info.entryPoints.get(entryPoint);
+          const existing = info.flows.get(entryPoint);
           if (!existing.some(f => f.join('→') === flowKey)) {
             existing.push(flow);
             info.totalFlows++;
@@ -274,9 +274,31 @@ function parseNewJsonFormat(data) {
     }
   }
 
-  info.symbols = Array.from(allSymbols.keys()).slice(0, 50);
-  info.ftsMatches = ftsMatches;
-  info.ftsMatchCount = ftsMatches.size;
+  // Collect definitions (standalone matches)
+  const seenDefs = new Set();
+  for (const def of definitions) {
+    if (def.name && def.name.length > 2 && !seenDefs.has(def.name)) {
+      seenDefs.add(def.name);
+      info.definitions.push(def.name);
+      if (def.is_fts_match) {
+        info.ftsMatches.add(def.name);
+      }
+    }
+  }
+
+  // Collect documents - MCP structure has metadata.title/file_path
+  for (const doc of documents) {
+    const meta = doc.metadata || doc;
+    const title = meta.title || meta.file_path || doc.title || doc.file_path || doc.path;
+    if (title) {
+      // Shorten path for display - use title if available, otherwise last 2 path segments
+      const shortTitle = meta.title && meta.title.length < 40
+        ? meta.title
+        : title.split('/').slice(-2).join('/');
+      info.documents.push(shortTitle);
+    }
+  }
+
   return info;
 }
 
@@ -285,14 +307,15 @@ function parseNewJsonFormat(data) {
  */
 function parseTextResults(resultText) {
   const info = {
-    entryPoints: new Map(),
-    symbols: [],
+    flows: new Map(),
+    definitions: [],
+    documents: [],
+    ftsMatches: new Set(),
     totalFlows: 0,
   };
 
   // Split by process blocks - each "process:" starts a new execution flow
   const processBlocks = resultText.split(/(?=process:)/);
-  const allSymbols = new Map();
 
   for (const block of processBlocks) {
     if (!block.includes('process:')) continue;
@@ -305,9 +328,6 @@ function parseTextResults(resultText) {
       const name = match[1];
       if (name.length > 2 && !['type', 'name', 'true', 'false', 'null'].includes(name.toLowerCase())) {
         symbolNames.push(name);
-        if (!allSymbols.has(name)) {
-          allSymbols.set(name, true);
-        }
       }
     }
 
@@ -316,13 +336,13 @@ function parseTextResults(resultText) {
       const entryPoint = uniqueSymbols[0];
       const flow = uniqueSymbols.slice(1, 5); // Rest of the flow (cap at 4 more)
 
-      if (!info.entryPoints.has(entryPoint)) {
-        info.entryPoints.set(entryPoint, []);
+      if (!info.flows.has(entryPoint)) {
+        info.flows.set(entryPoint, []);
       }
 
       // Add flow if not duplicate
       const flowKey = flow.join('→');
-      const existing = info.entryPoints.get(entryPoint);
+      const existing = info.flows.get(entryPoint);
       if (!existing.some(f => f.join('→') === flowKey)) {
         existing.push(flow);
         info.totalFlows++;
@@ -330,88 +350,88 @@ function parseTextResults(resultText) {
     }
   }
 
-  // Convert symbols for fallback display
-  info.symbols = Array.from(allSymbols.keys()).slice(0, 50);
-
   return info;
 }
 
 /**
- * Format a single flow as an arrow chain.
- * Returns: "→ symbol1 → symbol2 → symbol3"
- */
-function formatFlowChain(flow, formatSymbol) {
-  const { white, reset } = colors;
-  if (!flow || flow.length === 0) return '';
-
-  const parts = flow.map(s => formatSymbol(s));
-  return `${white}→${reset} ${parts.join(` ${white}→${reset} `)}`;
-}
-
-/**
- * Build flow display grouped by entry points.
- * Shows entry point with ◆, then each flow as a separate arrow chain.
+ * Build sectioned display with FLOWS, DEFINITIONS, DOCS.
  *
  * Format:
- * ◆ EntryPoint
- *   → callee1 → callee2 → callee3
- *   → callee1 → callee2 → callee4
+ * FLOWS:
+ * ◆ EntryPoint → callee1 → callee2
+ * ◆ EntryPoint2 → callee3
+ *
+ * DEFINITIONS:
+ * • auth, handleAuth, createToken
+ *
+ * DOCS:
+ * • README.md, auth/guide.md
  */
-function buildFlowDisplay(entryPoints, symbols, ftsMatches) {
-  const { green, yellow, magenta, gray, reset } = colors;
+function buildSectionedDisplay(info) {
+  const { green, yellow, magenta, cyan, gray, white, reset } = colors;
+  const lines = [];
 
   // Format symbol name - green for search hits, yellow for flow symbols
   const formatSymbol = (name) => {
-    if (ftsMatches && ftsMatches.has(name)) {
+    if (info.ftsMatches && info.ftsMatches.has(name)) {
       return `${green}${name}${reset}`;
     }
     return `${yellow}${name}${reset}`;
   };
 
-  // Show entry points with their flows as separate arrow chains
-  if (entryPoints && entryPoints.size > 0) {
-    const lines = [];
-    const maxEntryPoints = 12;
-    const maxFlowsPerEntry = 6;
-    let entryCount = 0;
+  // FLOWS section
+  if (info.flows && info.flows.size > 0) {
+    lines.push(`${white}FLOWS:${reset}`);
+    const maxFlows = 8;
+    let flowCount = 0;
 
-    for (const [entryPoint, flows] of entryPoints) {
-      if (entryCount >= maxEntryPoints) break;
-      entryCount++;
+    for (const [entryPoint, flowChains] of info.flows) {
+      if (flowCount >= maxFlows) break;
 
-      // Entry point line with magenta diamond
+      // Build compact flow: EntryPoint → callee1 → callee2
       const entryDisplay = formatSymbol(entryPoint);
-      lines.push(`${magenta}◆${reset} ${entryDisplay}`);
-
-      // Show each flow as a separate arrow chain
-      if (flows.length > 0) {
-        const flowsToShow = flows.slice(0, maxFlowsPerEntry);
-        for (const flow of flowsToShow) {
-          const chainStr = formatFlowChain(flow, formatSymbol);
-          if (chainStr) {
-            lines.push(`  ${chainStr}`);
-          }
-        }
-        if (flows.length > maxFlowsPerEntry) {
-          lines.push(`  ${gray}... +${flows.length - maxFlowsPerEntry} more flows${reset}`);
-        }
+      if (flowChains.length > 0 && flowChains[0].length > 0) {
+        const chain = flowChains[0].slice(0, 3).map(s => formatSymbol(s));
+        lines.push(`${magenta}◆${reset} ${entryDisplay} ${white}→${reset} ${chain.join(` ${white}→${reset} `)}`);
+      } else {
+        lines.push(`${magenta}◆${reset} ${entryDisplay}`);
       }
+      flowCount++;
     }
 
-    if (entryPoints.size > maxEntryPoints) {
-      lines.push(`${gray}... +${entryPoints.size - maxEntryPoints} more entry points${reset}`);
+    if (info.flows.size > maxFlows) {
+      lines.push(`${gray}  ... +${info.flows.size - maxFlows} more${reset}`);
     }
-
-    return lines.join('\n');
   }
 
-  // Fallback: show individual symbols
-  if (symbols && symbols.length > 0) {
-    const symbolList = symbols.map(s => formatSymbol(s));
-    return `  ${symbolList.join(`, `)}`;
+  // DEFINITIONS section
+  if (info.definitions && info.definitions.length > 0) {
+    if (lines.length > 0) lines.push('');
+    lines.push(`${white}DEFINITIONS:${reset}`);
+    const maxDefs = 10;
+    const defsToShow = info.definitions.slice(0, maxDefs);
+    const defList = defsToShow.map(d => formatSymbol(d)).join(', ');
+    lines.push(`${cyan}•${reset} ${defList}`);
+    if (info.definitions.length > maxDefs) {
+      lines.push(`${gray}  ... +${info.definitions.length - maxDefs} more${reset}`);
+    }
   }
 
-  return '';
+  // DOCS section - one per line
+  if (info.documents && info.documents.length > 0) {
+    if (lines.length > 0) lines.push('');
+    lines.push(`${white}DOCS:${reset}`);
+    const maxDocs = 5;
+    const docsToShow = info.documents.slice(0, maxDocs);
+    for (const doc of docsToShow) {
+      lines.push(`${cyan}•${reset} ${cyan}${doc}${reset}`);
+    }
+    if (info.documents.length > maxDocs) {
+      lines.push(`${gray}  ... +${info.documents.length - maxDocs} more${reset}`);
+    }
+  }
+
+  return lines.join('\n');
 }
 
 /**
@@ -424,34 +444,23 @@ function truncateQuery(query, maxLen = 30) {
 
 /**
  * Format search info into a concise, informative message.
- * Shows execution flows grouped by entry points.
+ * Shows three sections: FLOWS, DEFINITIONS, DOCS.
  */
 function formatSearchMessage(query, info, elapsed) {
   const displayQuery = truncateQuery(query, 35);
-  const { dim, green, yellow, magenta, gray, reset } = colors;
+  const { dim, gray, reset } = colors;
 
-  // Build header with stats
-  const entryCount = info.entryPoints ? info.entryPoints.size : 0;
-  const hasFtsMatches = info.ftsMatches && info.ftsMatches.size > 0;
   const timeStr = elapsed > 0 ? ` ${dim}(${elapsed}ms)${reset}` : '';
+  const header = `Search: "${displayQuery}"${timeStr}`;
 
-  let header;
-  if (entryCount > 0) {
-    header = `Search: "${displayQuery}"${timeStr}`;
-  } else {
-    header = `Search: "${displayQuery}"${timeStr}`;
-  }
+  // Build sectioned display
+  const sectionDisplay = buildSectionedDisplay(info);
 
-  const flowDisplay = buildFlowDisplay(info.entryPoints, info.symbols, info.ftsMatches);
-
-  if (flowDisplay) {
-    // Add separators and legend
+  if (sectionDisplay) {
+    const { green, yellow, reset: r } = colors;
+    const legend = `${green}search hit${r}  ${yellow}augmented${r}`;
     const separator = `${gray}─────────────────────────────────────${reset}`;
-    const legend = hasFtsMatches
-      ? `${magenta}◆ entry point${reset}  ${green}search hit${reset}  ${yellow}augmented${reset}`
-      : `${magenta}◆ entry point${reset}`;
-
-    return `${header}\n${legend}\n${separator}\n${flowDisplay}`;
+    return `${header}\n${legend}\n${separator}\n${sectionDisplay}`;
   }
 
   return header;

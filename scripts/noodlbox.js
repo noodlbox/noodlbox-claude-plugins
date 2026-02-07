@@ -211,8 +211,12 @@ function handlePostToolUse(input) {
   const query = input.tool_input?.q || input.tool_input?.query || 'query';
   const userMessage = lib.formatSearchMessage(query, searchInfo, 0);
 
-  // Output formatted results if we have entry points
-  if (searchInfo.entryPoints && searchInfo.entryPoints.size > 0) {
+  // Output formatted results if we have any content
+  const hasContent = (searchInfo.flows && searchInfo.flows.size > 0) ||
+                     (searchInfo.definitions && searchInfo.definitions.length > 0) ||
+                     (searchInfo.documents && searchInfo.documents.length > 0);
+
+  if (hasContent) {
     console.log(JSON.stringify({
       systemMessage: `\n${BRAND} ${userMessage}`,
       hookSpecificOutput: {

@@ -18,8 +18,10 @@ Plan and execute safe refactoring by understanding dependencies and impact.
 
 ```
 1. noodlbox_query_with_context  → Find the code to refactor
-2. noodlbox_raw_cypher_query   → Map all dependencies
-3. noodlbox_detect_impact      → Preview blast radius
+2. noodlbox_symbol_context      → Inspect symbol detail + edges
+3. noodlbox_raw_cypher_query   → Map all dependencies
+4. noodlbox_rename_symbol      → Execute a rename across the codebase
+5. noodlbox_detect_impact      → Preview blast radius
 ```
 
 ## Tool Reference
@@ -38,6 +40,39 @@ noodlbox_query_with_context(
   limit: 10
 )
 ```
+
+### noodlbox_symbol_context
+
+Inspect a symbol's detail, edges, signature, and centrality. File paths in the response are relative to the repo root. Outgoing edges are deduplicated by target symbol.
+
+```
+noodlbox_symbol_context(
+  repository: "current",
+  symbol_name: "PaymentService",
+  file_path: "src/payments/service.ts"
+)
+```
+
+**Response** is a tagged enum:
+- `status: "found"` -- symbol detail with `signature`, `centrality_score` (optional float), incoming/outgoing edges (CALLS, CONTAINS with real line numbers)
+- `status: "ambiguous"` -- multiple matches found; returns `candidates` array with `uid`, `name`, `kind`, `file_path`, `line` for each. Re-call with `file_path` to disambiguate.
+
+### noodlbox_rename_symbol
+
+Rename a symbol across the codebase. Updates the knowledge graph and produces AST-based search edits.
+
+```
+noodlbox_rename_symbol(
+  repository: "current",
+  symbol_name: "getUserById",
+  new_name: "findUserById",
+  file_path: "src/users/service.ts"
+)
+```
+
+**Response** is a tagged enum:
+- `status: "success"` -- rename applied; returns `graph_edits` (count of graph updates) and `ast_search_edits` (count of AST-based file edits). File paths are relative.
+- `status: "ambiguous"` -- multiple matches; returns `message` and `candidates` array. Re-call with `file_path` to disambiguate.
 
 ### noodlbox_raw_cypher_query
 
@@ -82,12 +117,14 @@ noodlbox_detect_impact(
 
 ```
 Rename Refactoring:
-- [ ] Find all references to the symbol
+- [ ] Inspect symbol context (noodlbox_symbol_context) for edges + centrality
+- [ ] If ambiguous, re-call with file_path to disambiguate
 - [ ] Check for string literals using the name
-- [ ] Identify test files that reference it
 - [ ] Check for external API surface changes
-- [ ] Plan rename order (interfaces → implementations → usages)
 - [ ] Verify no dynamic references (reflection, string keys)
+- [ ] Execute rename (noodlbox_rename_symbol)
+- [ ] Review graph_edits and ast_search_edits counts
+- [ ] Verify changes with detect_impact
 ```
 
 ### Extract Module
@@ -119,60 +156,67 @@ Split Service Refactoring:
 **Task**: "I want to rename getUserById to findUserById. What needs to change?"
 
 ```
-Step 1: Find all references
-noodlbox_raw_cypher_query(
+Step 1: Inspect symbol context
+noodlbox_symbol_context(
   repository: "current",
-  cypher: "MATCH (caller)-[:CALLS]->(fn:CODE_SYMBOL {name: 'getUserById'}) RETURN caller.name, caller.file_path"
+  symbol_name: "getUserById"
 )
 
-→ Results:
-  AuthService.validateToken (src/auth/service.ts:45)
-  ProfileController.getProfile (src/profile/controller.ts:23)
-  OrderService.getOrderOwner (src/orders/service.ts:78)
-  UserController.show (src/users/controller.ts:34)
+→ Response (status: "ambiguous"):
+  candidates:
+  - uid: "abc123", name: "getUserById", kind: "Method", file_path: "src/users/service.ts", line: 42
+  - uid: "def456", name: "getUserById", kind: "Method", file_path: "src/users/repository.ts", line: 18
 
-Step 2: Find the definition
-noodlbox_raw_cypher_query(
+Step 2: Disambiguate and inspect edges
+noodlbox_symbol_context(
   repository: "current",
-  cypher: "MATCH (fn:CODE_SYMBOL {name: 'getUserById'}) RETURN fn.file_path, fn.kind"
+  symbol_name: "getUserById",
+  file_path: "src/users/service.ts"
 )
 
-→ Results:
-  UserService (src/users/service.ts) - Method
-  UserRepository (src/users/repository.ts) - Method
+→ Response (status: "found"):
+  name: getUserById
+  kind: Method
+  file_path: src/users/service.ts
+  signature: "async getUserById(id: string): Promise<User>"
+  centrality_score: 0.72
+  incoming_edges (CALLS):
+    - AuthService.validateToken (src/auth/service.ts:45)
+    - ProfileController.getProfile (src/profile/controller.ts:23)
+    - OrderService.getOrderOwner (src/orders/service.ts:78)
+    - UserController.show (src/users/controller.ts:34)
+  outgoing_edges (CALLS):
+    - UserRepository.getUserById (src/users/repository.ts:18)
 
-Step 3: Check for tests
-noodlbox_query_with_context(
+Step 3: Execute rename
+noodlbox_rename_symbol(
   repository: "current",
-  q: "getUserById test spec",
-  task_context: "finding tests for getUserById",
-  limit: 5
+  symbol_name: "getUserById",
+  new_name: "findUserById",
+  file_path: "src/users/service.ts"
 )
 
-→ Results:
-  user.service.spec.ts
-  user.repository.spec.ts
+→ Response (status: "success"):
+  graph_edits: 6
+  ast_search_edits: 8
 
-Step 4: Create rename plan
-Files to update:
-1. src/users/service.ts (definition)
-2. src/users/repository.ts (definition)
-3. src/auth/service.ts (caller)
-4. src/profile/controller.ts (caller)
-5. src/orders/service.ts (caller)
-6. src/users/controller.ts (caller)
-7. src/users/service.spec.ts (test)
-8. src/users/repository.spec.ts (test)
+Step 4: Verify with impact detection
+noodlbox_detect_impact(
+  repository: "current",
+  change_scope: "all"
+)
+
+→ Confirm changes are contained to expected files
 ```
 
 **Checklist for this example**:
 ```
-- [x] Find all references (4 callers)
-- [x] Find definitions (2 files)
-- [x] Check for tests (2 test files)
+- [x] Inspect symbol context (centrality: 0.72, 4 callers)
+- [x] Disambiguate (two matches, specified file_path)
 - [ ] Check for string literals (grep for "getUserById")
 - [ ] Check external API (not exposed)
-- [x] Plan rename order
+- [x] Execute rename (6 graph edits, 8 AST edits)
+- [x] Verify with detect_impact
 ```
 
 ## Example: Split PaymentService
@@ -234,7 +278,7 @@ Based on dependencies:
 
 | Goal | Approach |
 |------|----------|
-| Rename symbol | Find all callers + definition + tests |
+| Rename symbol | Use symbol_context to inspect edges, then rename_symbol to execute |
 | Extract function | Check it's called from one place, verify no side effects |
 | Extract module | Map internal deps, define interface, update imports |
 | Split service | Group by domain, map cross-dependencies, plan migration |

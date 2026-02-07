@@ -18,8 +18,9 @@ Investigate bugs by understanding code relationships and tracing execution paths
 
 ```
 1. noodlbox_query_with_context  → Find code related to the error
-2. READ map://current/process/{id} → Trace execution flow
-3. noodlbox_raw_cypher_query   → Find callers/callees of suspect code
+2. noodlbox_symbol_context      → Inspect suspect symbol's edges + centrality
+3. READ map://current/process/{id} → Trace execution flow
+4. noodlbox_raw_cypher_query   → Find callers/callees of suspect code
 ```
 
 ## Tool Reference
@@ -39,6 +40,22 @@ noodlbox_query_with_context(
   max_symbols: 10
 )
 ```
+
+### noodlbox_symbol_context
+
+Inspect a suspect symbol's edges, signature, and centrality to understand its role.
+
+```
+noodlbox_symbol_context(
+  repository: "current",
+  symbol_name: "validatePayment",
+  file_path: "src/payments/validator.ts"
+)
+```
+
+**Response** is a tagged enum:
+- `status: "found"` -- symbol detail with `signature`, `centrality_score` (optional float), incoming/outgoing edges (deduplicated). File paths are relative to repo root.
+- `status: "ambiguous"` -- returns `candidates` array with `uid`, `name`, `kind`, `file_path`, `line`. Re-call with `file_path` to disambiguate.
 
 ### noodlbox_detect_impact
 
