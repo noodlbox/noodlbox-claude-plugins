@@ -65,7 +65,7 @@ const colors = {
 };
 
 /**
- * Parse noodl search results to extract execution flows grouped by entry point.
+ * Parse noodl search results to extract workflow traces grouped by entry point.
  * Handles both text format (from noodl search CLI) and JSON format (from MCP).
  * Returns: { flows, definitions, documents, ftsMatches }
  */
@@ -314,7 +314,7 @@ function parseTextResults(resultText) {
     totalFlows: 0,
   };
 
-  // Split by process blocks - each "process:" starts a new execution flow
+  // Split by process blocks - each "process:" starts a new workflow trace
   const processBlocks = resultText.split(/(?=process:)/);
 
   for (const block of processBlocks) {

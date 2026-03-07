@@ -22,7 +22,7 @@ Check `repository://list` to see if a repository is already indexed.
 | Term | Meaning |
 |------|---------|
 | **Community** | Cluster of tightly-coupled symbols (functional module) |
-| **Process** | Execution flow from entry point through call chain |
+| **Process** | Workflow trace from entry point through call chain |
 | **Centrality** | Symbol importance - high means many callers/callees |
 
 ## MCP Tools
@@ -32,6 +32,7 @@ Check `repository://list` to see if a repository is already indexed.
 - `noodlbox_raw_cypher_query` - Execute targeted Cypher queries on the knowledge graph
 - `noodlbox_query_with_context` - Natural language search returning processes
 - `noodlbox_search_documents` - Search documentation with semantic/hybrid search
+- `noodlbox_search_deps` - Search across dependency repositories
 - `noodlbox_detect_impact` - Analyze git changes blast radius
 - `noodlbox_symbol_context` - Get detailed symbol info (edges, signature, centrality)
 - `noodlbox_rename_symbol` - Rename a symbol across the codebase
@@ -42,7 +43,7 @@ Check `repository://list` to see if a repository is already indexed.
 - `db://schema/{repository}` - Database schema for a repository
 - `map://{repository}` - Codebase overview map
 - `map://{repository}/community/{id}` - Community detail view
-- `map://{repository}/process/{id}` - Process execution trace
+- `map://{repository}/workflows/{id}` - Workflow trace
 
 ## Best Practices
 
