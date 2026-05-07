@@ -16,7 +16,7 @@ const lib = require(path.join(__dirname, '../shared/hooks/lib.js'));
 const SCHEMA_TIMEOUT_MS = 5000;
 
 // Path to AGENTS.md content (shared across all platforms)
-const AGENTS_MD_PATH = path.join(__dirname, '../shared/skills/noodlbox-setup/references/AGENTS.md');
+const AGENTS_MD_PATH = path.join(__dirname, '../shared/skills/nbx-setup/references/AGENTS.md');
 
 /**
  * Load AGENTS.md content, stripping YAML frontmatter
