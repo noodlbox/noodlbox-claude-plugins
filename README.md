@@ -11,13 +11,13 @@ claude plugin install noodlbox@noodlbox
 
 ## Features
 
-### MCP Server
-Connects to the noodlbox MCP server for knowledge graph queries.
+### Skills + CLI
+Guides Claude Code to use the `noodl` CLI for knowledge graph queries.
 
 **Capabilities:**
-- Tools: Cypher queries, semantic search, impact detection
-- Resources: Repository list, schema, codebase maps
-- Logging: Structured log notifications during operations
+- Commands: Cypher queries, semantic search, impact detection, symbol context
+- Resources: Codebase maps via `noodl resource map`
+- Hooks: Search augmentation and session context
 
 ### Skills
 - **Exploration workflows** - Systematic codebase discovery
@@ -25,19 +25,19 @@ Connects to the noodlbox MCP server for knowledge graph queries.
 - **Refactoring analysis** - Understand impact before changes
 
 ### Slash Commands
-- `/noodlbox:setup-noodlbox` - Set up noodlbox MCP context for the project
+- `/noodlbox:setup-noodlbox` - Set up noodlbox CLI context for the project
 
 ## Prerequisites
 
 1. Install noodlbox CLI: https://docs.noodlbox.io/getting-started/installation
 2. Analyze your repository: `noodl analyze /path/to/repo`
 
-The MCP server is launched automatically by Claude Code.
+The plugin uses CLI-first workflows by default.
 
 ## Documentation
 
 - [Getting Started](https://docs.noodlbox.io/getting-started)
-- [MCP Setup](https://docs.noodlbox.io/getting-started/setup-mcp)
+- [CLI Setup](https://docs.noodlbox.io/getting-started)
 - [Workflows](https://docs.noodlbox.io/workflows)
 
 ## License

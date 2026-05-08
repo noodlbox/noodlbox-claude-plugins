@@ -179,7 +179,7 @@ function handlePreToolUse(input) {
 }
 
 /**
- * PostToolUse handler - formats noodlbox MCP tool results for humans
+ * PostToolUse handler - formats legacy query_with_context results for humans
  */
 function handlePostToolUse(input) {
   const toolName = input.tool_name || '';
@@ -187,7 +187,7 @@ function handlePostToolUse(input) {
 
   lib.debug('PostToolUse:', { toolName });
 
-  // Only handle noodlbox query_with_context (MCP tools: mcp__<server>__<tool>)
+  // Only handle legacy query_with_context tool results.
   if (!toolName.includes('query_with_context')) {
     return;
   }
