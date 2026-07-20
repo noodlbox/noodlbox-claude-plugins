@@ -140,6 +140,44 @@ function handlePreToolUse(input) {
 
   lib.debug('PreToolUse:', { toolName, toolInput, cwd });
 
+  // Edit/Write prospectus auto-injection REMOVED (2026-07-19, Project 80
+  // agent-channel trim): three sealed probes (Live8 0/4 acknowledgment,
+  // Live3 0/3 completion, June packet_verify f2p fractions) showed
+  // map-grade content delivered to agents steers nothing and habituates.
+  // The map stays on demand (`noodl prospectus`) and in the UI; the
+  // commit-boundary strict audit below is the agent channel.
+
+  // Bash `git commit`: deliver the verify digest ONCE at the commit
+  // boundary (Project 74 moment 4, agent-side) — the strict structural
+  // audit of the working tree, staleness-loud, findings-first. Never
+  // blocks the tool; a clean "no findings" digest injects nothing.
+  if (toolName === 'Bash' && lib.isCommitCommand(toolInput.command || '')) {
+    const audit = lib.runNoodlVerifyDigest(cwd);
+    // Machine contract (2026-07-19): empty stdout ⇔ nothing to deliver.
+    // The all-clear reassurance goes to the CLI's stderr, so no sentinel
+    // string-matching is needed (or allowed) here.
+    if (!audit.success || !audit.result.trim()) {
+      return;
+    }
+    // Never inject the SAME digest twice in one session (retry spam,
+    // repeated stale banner); a changed digest still fires.
+    if (lib.verifyAuditAlreadyDelivered(input.session_id, audit.result)) {
+      lib.debug('Identical verify digest already delivered this session');
+      return;
+    }
+    lib.markVerifyAuditDelivered(input.session_id, audit.result);
+    console.log(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'allow',
+        additionalContext:
+          `Noodlbox commit audit (structural findings on the changes you are about to commit):\n` +
+          audit.result
+      }
+    }));
+    return;
+  }
+
   // Only intercept Glob/Grep/Bash
   if (toolName !== 'Glob' && toolName !== 'Grep' && toolName !== 'Bash') {
     lib.debug('Not a search tool, allowing');
