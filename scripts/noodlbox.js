@@ -36,6 +36,28 @@ function loadAgentsMdContent() {
 const BRAND = '\x1b[38;5;39m[noodlbox]\x1b[0m'; // Blue
 
 /**
+ * Run the verify digest and inject it as PreToolUse context when it has
+ * anything to deliver. Shared by the commit-boundary audit and the
+ * mid-edit nudge — one guard, one envelope. Never blocks the tool
+ * (machine contract: empty stdout ⇔ nothing to deliver; the all-clear
+ * reassurance goes to the CLI's stderr, so no sentinel string-matching
+ * happens here).
+ */
+function injectVerifyDigest(cwd, sessionId, channel, prefix) {
+  const audit = lib.runNoodlVerifyDigest(cwd, sessionId, channel);
+  if (!audit.success || !audit.result.trim()) {
+    return;
+  }
+  console.log(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'allow',
+      additionalContext: prefix + audit.result
+    }
+  }));
+}
+
+/**
  * Extract search query from tool input
  */
 function extractQueryFromTool(toolName, toolInput) {
@@ -146,35 +168,46 @@ function handlePreToolUse(input) {
   // map-grade content delivered to agents steers nothing and habituates.
   // The map stays on demand (`noodl prospectus`) and in the UI; the
   // commit-boundary strict audit below is the agent channel.
+  // (2026-07-24, delivery-rebuild P3: Edit/Write carries a STRICT
+  // findings-only mid-edit nudge below — same proof tier as the commit
+  // audit, throttled + repeat-suppressed. That is NOT the map-grade
+  // injection this note removed; the removal stands.)
 
   // Bash `git commit`: deliver the verify digest ONCE at the commit
   // boundary (Project 74 moment 4, agent-side) — the strict structural
   // audit of the working tree, staleness-loud, findings-first. Never
   // blocks the tool; a clean "no findings" digest injects nothing.
   if (toolName === 'Bash' && lib.isCommitCommand(toolInput.command || '')) {
-    const audit = lib.runNoodlVerifyDigest(cwd);
-    // Machine contract (2026-07-19): empty stdout ⇔ nothing to deliver.
-    // The all-clear reassurance goes to the CLI's stderr, so no sentinel
-    // string-matching is needed (or allowed) here.
-    if (!audit.success || !audit.result.trim()) {
+    // Session dedup lives in the CLI at FINDING grain (delivery-rebuild
+    // P1): `noodl verify --session-id` suppresses already-delivered
+    // findings itself, so an unchanged report renders an empty digest
+    // and injectVerifyDigest's empty-stdout guard returns.
+    injectVerifyDigest(
+      cwd,
+      input.session_id,
+      undefined,
+      'Noodlbox commit audit (structural findings on the changes you are about to commit):\n'
+    );
+    return;
+  }
+
+  // Edit/Write: the MID-EDIT nudge (delivery-rebuild P3) — the same
+  // strict findings the commit audit delivers, but at the moment the
+  // agent is still editing, so an incomplete propagation surfaces while
+  // the task is open instead of at the commit boundary. Once per NEW
+  // obligation, never per save: the CLI suppresses repeats per finding
+  // per session (P1) and renders findings-only (no banners — wall W5);
+  // midEditDue throttles the RUN cost. Never blocks the tool.
+  if (toolName === 'Edit' || toolName === 'Write') {
+    if (!lib.midEditDue(input.session_id)) {
       return;
     }
-    // Never inject the SAME digest twice in one session (retry spam,
-    // repeated stale banner); a changed digest still fires.
-    if (lib.verifyAuditAlreadyDelivered(input.session_id, audit.result)) {
-      lib.debug('Identical verify digest already delivered this session');
-      return;
-    }
-    lib.markVerifyAuditDelivered(input.session_id, audit.result);
-    console.log(JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'allow',
-        additionalContext:
-          `Noodlbox commit audit (structural findings on the changes you are about to commit):\n` +
-          audit.result
-      }
-    }));
+    injectVerifyDigest(
+      cwd,
+      input.session_id,
+      'mid-edit',
+      'Noodlbox mid-edit audit (structural findings on your working tree so far):\n'
+    );
     return;
   }
 

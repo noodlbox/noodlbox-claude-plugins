@@ -711,47 +711,97 @@ function isCommitCommand(command) {
 /**
  * Run `noodl verify --digest` — the commit-boundary structural audit
  * (Project 74 moment 4 delivered where the agent already is). Fail-open.
+ * `sessionId` (when the hook payload carries one) flows into the coherence
+ * ledger's delivery telemetry (§0-bis P0) so each finding records which
+ * session received it. `channel` (P3): the mid-edit nudge passes
+ * 'mid-edit' so the CLI renders the findings-only projection and the
+ * ledger records `mid_edit_nudge`; the commit boundary omits it (the CLI
+ * infers the commit-boundary agent channel from the session id).
  */
-function runNoodlVerifyDigest(cwd) {
-  return runNoodlDigest(['verify', '--digest', '--audience', 'agent'], cwd, VERIFY_DIGEST_TIMEOUT_MS, 'verify digest');
+function runNoodlVerifyDigest(cwd, sessionId, channel) {
+  const args = ['verify', '--digest', '--audience', 'agent'];
+  if (sessionId) {
+    args.push('--session-id', sessionId);
+  }
+  if (channel) {
+    args.push('--channel', channel);
+  }
+  return runNoodlDigest(args, cwd, VERIFY_DIGEST_TIMEOUT_MS, 'verify digest');
 }
 
-/** Session-scoped verify-audit state file path. */
-function verifyAuditStateFile(sessionId) {
-  const key = sessionId || 'no-session';
-  return path.join(os.tmpdir(), `noodlbox-verify-audit-${key}.json`);
+// Mid-edit nudge cost gate (P3): a verify run costs seconds, so it must
+// not ride EVERY Edit/Write. This throttles the RUN (wall-clock cost),
+// not the content — per-finding repeat suppression is the CLI's job
+// (session-seen + open-ledger, P1), so an unchanged report past the gate
+// still injects nothing. 60s keeps the nudge within one edit burst of
+// the obligation that created it.
+const MID_EDIT_MIN_INTERVAL_MS = 60000;
+
+function midEditStatePath(sessionId) {
+  const safe = String(sessionId).replace(/[^A-Za-z0-9-]/g, '_');
+  return path.join(os.tmpdir(), `noodlbox-midedit-last-${safe}.json`);
+}
+
+// Session-state GC window (hours) — mirrors the CLI's session-seen sweep
+// (COHERENCE_SESSION_SEEN_GC_HOURS = 48) so the two per-session tmp-file
+// mechanisms age out together.
+const MID_EDIT_STATE_GC_HOURS = 48;
+
+/**
+ * One gate call per PreToolUse(Edit|Write): true when the interval has
+ * passed. Marks NOW on pass as a BEST-EFFORT mitigation against stacked
+ * runs — the read-then-write is not atomic, so two truly concurrent
+ * hooks can both pass; that is acceptable for a cost gate (verify is
+ * fail-open and content dedup is the CLI's per-finding suppression). No
+ * session id ⇒ never nudge — without a session the CLI cannot suppress
+ * repeats per session, and an unthrottleable channel would re-nag.
+ */
+function midEditDue(sessionId) {
+  if (!sessionId) return false;
+  const statePath = midEditStatePath(sessionId);
+  const now = Date.now();
+  let firstWrite = false;
+  try {
+    const last = JSON.parse(fs.readFileSync(statePath, 'utf-8')).last;
+    if (typeof last === 'number' && now - last < MID_EDIT_MIN_INTERVAL_MS) {
+      return false;
+    }
+  } catch {
+    // Missing/corrupt state = due (first nudge of the session).
+    firstWrite = true;
+  }
+  try {
+    fs.writeFileSync(statePath, JSON.stringify({ last: now }));
+  } catch (e) {
+    debug('mid-edit state write failed:', e.message);
+  }
+  if (firstWrite) {
+    gcMidEditState(now);
+  }
+  return true;
 }
 
 /**
- * Content-dedup for the commit-boundary audit: the SAME digest is never
- * injected twice in one session (kills retry spam and the repeated
- * stale banner after the first commit moves HEAD — review M2), while a
- * genuinely CHANGED digest still fires. Tmp-state + 48h GC.
+ * Best-effort sweep of expired mid-edit state files — runs once per
+ * session (its first write), mirroring the CLI's session-seen GC so
+ * neither per-session tmp mechanism accumulates unbounded.
  */
-function verifyAuditAlreadyDelivered(sessionId, digest) {
-  const hash = crypto.createHash('sha256').update(digest).digest('hex');
-  return readProspectusSeen(verifyAuditStateFile(sessionId)).includes(hash);
-}
-
-function markVerifyAuditDelivered(sessionId, digest) {
-  const hash = crypto.createHash('sha256').update(digest).digest('hex');
-  const stateFile = verifyAuditStateFile(sessionId);
-  const seen = readProspectusSeen(stateFile);
-  if (!seen.includes(hash)) seen.push(hash);
+function gcMidEditState(now) {
+  const cutoff = now - MID_EDIT_STATE_GC_HOURS * 3600 * 1000;
   try {
-    fs.writeFileSync(stateFile, JSON.stringify(seen));
-  } catch (e) {
-    debug('verify-audit state write failed:', e.message);
-  }
-  try {
-    const cutoff = Date.now() - 48 * 60 * 60 * 1000;
     for (const name of fs.readdirSync(os.tmpdir())) {
-      if (!name.startsWith('noodlbox-verify-audit-')) continue;
+      if (!name.startsWith('noodlbox-midedit-last-')) continue;
       const full = path.join(os.tmpdir(), name);
-      if (fs.statSync(full).mtimeMs < cutoff) fs.unlinkSync(full);
+      try {
+        if (fs.statSync(full).mtimeMs < cutoff) {
+          fs.unlinkSync(full);
+        }
+      } catch {
+        // Raced away or unreadable — best-effort.
+      }
     }
-  } catch {
-    // GC is best-effort.
+  } catch (e) {
+    debug('mid-edit state GC failed:', e.message);
   }
 }
 
@@ -818,8 +868,9 @@ function listRepositories(timeout = 10000) {
 module.exports = {
   isCommitCommand,
   runNoodlVerifyDigest,
-  verifyAuditAlreadyDelivered,
-  markVerifyAuditDelivered,
+  midEditDue,
+  MID_EDIT_MIN_INTERVAL_MS,
+  midEditStatePath,
   debug,
   log,
   readInput,
