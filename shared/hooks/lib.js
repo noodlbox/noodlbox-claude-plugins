@@ -766,9 +766,15 @@ function runNoodlSearch(query, cwd) {
     }
 
     const startTime = Date.now();
+    // The hook augments an agent mid-task, so it requests the enriched
+    // `implement` intent instead of the lean Explore default — otherwise the
+    // intent-gated retrieval stages (anchor-and-expand, depth-bounded trace)
+    // never reach the installed surface (kettle plan, Amendment 1: a stage is
+    // not shipped until a caller actually requests the intent that turns it
+    // on). Explore stays available as the explicit lean opt-out.
     let result = execFileSync(
       NOODL_PATH,
-      ['search', query, '--box', resolvedCwd, '--limit', '50'],
+      ['search', query, '--box', resolvedCwd, '--limit', '50', '--intent', 'implement'],
       { encoding: 'utf-8', timeout: SEARCH_TIMEOUT_MS, stdio: ['pipe', 'pipe', 'pipe'] }
     );
     const elapsed = Date.now() - startTime;
