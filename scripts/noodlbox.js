@@ -252,11 +252,46 @@ function handlePreToolUse(input) {
 /**
  * PostToolUse handler - formats legacy query_with_context results for humans
  */
+/**
+ * True only when the tool response POSITIVELY reports failure. The
+ * PostToolUse `tool_response` shape varies by host version; this reads
+ * the documented fields when present (`exit_code`/`exitCode`,
+ * `interrupted`) and FAILS OPEN on absence — a commit we cannot grade
+ * still gets its cheap incremental re-analyze rather than risking a
+ * stale baseline.
+ */
+function commitVisiblyFailed(toolResponse) {
+  if (!toolResponse || typeof toolResponse !== 'object') return false;
+  if (toolResponse.interrupted === true) return true;
+  const code = toolResponse.exit_code ?? toolResponse.exitCode;
+  return typeof code === 'number' && code !== 0;
+}
+
 function handlePostToolUse(input) {
   const toolName = input.tool_name || '';
   const toolResponse = input.tool_response || '';
 
   lib.debug('PostToolUse:', { toolName });
+
+  // Bash `git commit` succeeded: refresh the committed baseline in the
+  // background (E3 ship requirement 2 — daemonless watcher emulation).
+  // The commit moved HEAD past the analyzed graph; without a re-analyze
+  // every later digest in this session is the stale banner (the defect
+  // that voided the first loop-probe fleet). Debounced per repo,
+  // detached, never blocks the hook. Gated on an indexed noodlbox box
+  // (same guard as PreToolUse — the plugin is installed globally and
+  // must not act in unrelated repos) and on the command not visibly
+  // failing: claiming the debounce window on a REJECTED commit
+  // (pre-commit hook, nothing-to-commit) would skip the re-analyze for
+  // the real commit that follows within the window.
+  const cwd = input.cwd || process.cwd();
+  if (toolName === 'Bash' && lib.isCommitCommand(input.tool_input?.command || '')) {
+    const failed = commitVisiblyFailed(input.tool_response);
+    if (!failed && lib.getIndexedRepoInfo(cwd) && lib.postCommitAnalyzeDue(cwd)) {
+      lib.spawnPostCommitAnalyze(cwd);
+    }
+    return;
+  }
 
   // Only handle legacy query_with_context tool results.
   if (!toolName.includes('query_with_context')) {
@@ -316,4 +351,14 @@ function main() {
   }
 }
 
-main();
+// Direct execution only — `require()`-ing this module (tests) must not
+// consume stdin or run the dispatcher.
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  commitVisiblyFailed,
+  handlePostToolUse,
+  handlePreToolUse,
+};

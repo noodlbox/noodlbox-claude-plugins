@@ -4,7 +4,7 @@
  * Common functions for semantic search augmentation across platforms.
  */
 
-const { execFileSync } = require('child_process');
+const { execFileSync, spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
@@ -758,27 +758,93 @@ const MID_EDIT_STATE_GC_HOURS = 48;
  */
 function midEditDue(sessionId) {
   if (!sessionId) return false;
-  const statePath = midEditStatePath(sessionId);
+  const { due, firstWrite } = windowGateDue(
+    midEditStatePath(sessionId),
+    MID_EDIT_MIN_INTERVAL_MS
+  );
+  if (due && firstWrite) {
+    gcMidEditState(Date.now());
+  }
+  return due;
+}
+
+// Post-commit re-analyze debounce (E3 ship requirement 2). One spawn per
+// repo per window: rapid commit sequences (rebase scripts, fixup chains)
+// must not stack analyze processes — the per-box flock serializes them
+// anyway, so extras would only queue and burn CPU.
+const POST_COMMIT_ANALYZE_DEBOUNCE_MS = 120000;
+
+/**
+ * Generic tmp-file window gate shared by the per-session mid-edit
+ * throttle and the per-repo post-commit debounce: read `{last}`, deny
+ * inside the window, claim NOW otherwise. BEST-EFFORT by contract — the
+ * read-then-write is not atomic, so two truly concurrent callers can
+ * both pass; acceptable for cost gates (verify is fail-open, analyze is
+ * flock-serialized). Missing/corrupt state fails open (= due). Returns
+ * `{ due, firstWrite }` so callers can hang one-time side effects (the
+ * mid-edit GC) off the first claim.
+ */
+function windowGateDue(statePath, windowMs) {
   const now = Date.now();
   let firstWrite = false;
   try {
     const last = JSON.parse(fs.readFileSync(statePath, 'utf-8')).last;
-    if (typeof last === 'number' && now - last < MID_EDIT_MIN_INTERVAL_MS) {
-      return false;
+    if (typeof last === 'number' && now - last < windowMs) {
+      return { due: false, firstWrite: false };
     }
   } catch {
-    // Missing/corrupt state = due (first nudge of the session).
+    // Missing/corrupt state = due (first claim of the window).
     firstWrite = true;
   }
   try {
     fs.writeFileSync(statePath, JSON.stringify({ last: now }));
   } catch (e) {
-    debug('mid-edit state write failed:', e.message);
+    debug('window gate state write failed:', e.message);
   }
-  if (firstWrite) {
-    gcMidEditState(now);
+  return { due: true, firstWrite };
+}
+
+function postCommitStatePath(cwd) {
+  const key = crypto.createHash('sha256').update(String(cwd)).digest('hex').slice(0, 16);
+  return path.join(os.tmpdir(), `noodlbox-postcommit-${key}.json`);
+}
+
+/**
+ * True when a post-commit analyze may spawn for this repo — the shared
+ * window gate keyed by repo path.
+ */
+function postCommitAnalyzeDue(cwd) {
+  if (!cwd) return false;
+  return windowGateDue(postCommitStatePath(cwd), POST_COMMIT_ANALYZE_DEBOUNCE_MS).due;
+}
+
+/**
+ * Fire-and-forget `noodl analyze` after a commit moved HEAD (E3 ship
+ * requirement 2 — the daemonless watcher emulation). Without this the
+ * committed baseline goes stale on the first agent commit and every
+ * later verify digest is the stale banner, exactly the defect that
+ * voided the first loop-probe fleet. Detached + unref'd: the hook
+ * returns immediately; analyze runs under the per-box flock; failures
+ * are silent by design (the next verify surfaces staleness loudly).
+ * Resolves the binary via NOODL_PATH like every other invocation in
+ * this file — a hardcoded name would silently no-op under
+ * NOODLBOX_CLI_PATH, re-introducing the stale-baseline defect exactly
+ * where the override matters.
+ */
+function spawnPostCommitAnalyze(cwd) {
+  try {
+    const child = spawn(NOODL_PATH, ['analyze', '--skip-deps', '.'], {
+      cwd,
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.on('error', (e) => debug('post-commit analyze spawn failed:', e.message));
+    child.unref();
+    return true;
+  } catch (e) {
+    debug('post-commit analyze spawn failed:', e.message);
+    return false;
   }
-  return true;
 }
 
 /**
@@ -871,6 +937,11 @@ module.exports = {
   midEditDue,
   MID_EDIT_MIN_INTERVAL_MS,
   midEditStatePath,
+  postCommitAnalyzeDue,
+  POST_COMMIT_ANALYZE_DEBOUNCE_MS,
+  postCommitStatePath,
+  spawnPostCommitAnalyze,
+  windowGateDue,
   debug,
   log,
   readInput,
