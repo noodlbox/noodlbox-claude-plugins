@@ -554,6 +554,145 @@ function extractQueryFromBash(command) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Pattern routing — the trigger.
+//
+// A grep/rg pattern is not a query. Mining it into one asks a DIFFERENT
+// question than the agent asked: `handle\w+Request` becomes "Request",
+// `^impl .*Storage$` becomes "impl Storage" — neither is what the agent
+// wanted, and a ranked-retrieval answer to a shape-match request is noise.
+//
+// So the pattern is never sanitized. Instead it is classified by SHAPE, and a
+// shape that can't earn a graph answer runs no graph command at all:
+//
+//   bare identifier (≥4 chars, not a keyword)  → `noodl def`   (the agent
+//       already knows the symbol; the graph gives the definition site plus its
+//       call surface — information grep cannot produce, not a re-ranking of the
+//       lines grep would return)
+//   prose (≥2 plain English words)             → `noodl search` (a question
+//       with no known symbol, which is what ranked retrieval is for)
+//   regex / path / glob / mixed                → nothing (a regex describes a
+//       SHAPE; the caller wants line numbers, which grep answers exactly)
+// ---------------------------------------------------------------------------
+
+// Code tokens, not English. Their presence disqualifies a "prose" read and a
+// bare identifier that IS one of these is a language keyword, not a symbol.
+const STRUCTURAL_KEYWORDS = new Set([
+  'fn', 'impl', 'struct', 'enum', 'trait', 'mod', 'pub', 'use', 'let', 'const',
+  'static', 'async', 'await', 'return', 'match', 'if', 'else', 'for', 'while',
+  'loop', 'class', 'def', 'func', 'function', 'var', 'type', 'interface',
+  'import', 'export', 'from', 'case', 'switch', 'new', 'this', 'self', 'super',
+]);
+
+const REGEX_METACHARS = /[\^$.|?+*()[\]{}\\]/;
+
+/**
+ * A single code identifier the agent already knows — `LanceStorage`,
+ * `resolveReadScope`, `Foo.bar`. Dotted member paths are allowed; anything
+ * with whitespace, a path separator, a regex metachar, or a length below the
+ * floor is not one. Pure keywords (`impl`, `struct`) are excluded — they name
+ * a construct, not a symbol.
+ */
+function isBareIdentifier(pattern) {
+  if (typeof pattern !== 'string') return false;
+  const term = pattern.trim();
+  if (term.length < 4) return false;
+  if (!/^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/.test(term)) return false;
+  if (!/[A-Za-z]/.test(term)) return false; // not a pure number/underscore run
+  const base = term.split('.')[0];
+  return !STRUCTURAL_KEYWORDS.has(base);
+}
+
+/**
+ * Reads as a question — two or more plain English words. Rejects anything
+ * carrying regex shape, a path separator, or a structural-keyword salad
+ * (`fn (&self|async fn` is a code-shape grep, not a question).
+ */
+function looksLikeProse(pattern) {
+  if (typeof pattern !== 'string') return false;
+  const text = pattern.trim();
+  if (text.length < 3 || REGEX_METACHARS.test(text) || text.includes('/')) {
+    return false;
+  }
+  const words = text.split(/\s+/).filter((w) => w.length >= 2);
+  if (words.length < 2) return false;
+  // Every word plain-alphabetic (allow internal hyphen/apostrophe), and NOT
+  // all of them structural keywords.
+  const plain = words.every((w) => /^[A-Za-z][A-Za-z'-]*$/.test(w));
+  if (!plain) return false;
+  return !words.every((w) => STRUCTURAL_KEYWORDS.has(w.toLowerCase()));
+}
+
+/**
+ * Route a raw search pattern to a verb by its shape, or `null` to run nothing.
+ * The pattern is passed through verbatim — never cleaned into a query.
+ */
+function routePattern(pattern) {
+  if (typeof pattern !== 'string') return null;
+  const term = pattern.trim();
+  if (!term || term.length > MAX_COMMAND_LENGTH) return null;
+  if (isBareIdentifier(term)) return { verb: 'def', term };
+  if (looksLikeProse(term)) return { verb: 'search', term };
+  return null;
+}
+
+/** The Grep tool hands its pattern straight to the router. */
+function routeGrepPattern(pattern) {
+  return routePattern(pattern);
+}
+
+/**
+ * Pull the RAW grep/rg pattern out of a shell command and route it. Reuses the
+ * quote-aware tokenizer and per-command flag sets, but returns the pattern
+ * token uncleaned so the router sees its true shape. `find` is absent from the
+ * router: its patterns are filename globs — path lookups by construction.
+ */
+function routeBashCommand(command) {
+  if (!command || typeof command !== 'string' || command.length > MAX_COMMAND_LENGTH) {
+    return null;
+  }
+  let tokens;
+  try {
+    tokens = tokenize(command);
+  } catch (e) {
+    debug('Shell parse error:', e.message);
+    return null;
+  }
+  if (tokens.length === 0) return null;
+
+  let cmdIndex = 0;
+  for (let i = 0; i < tokens.length; i++) {
+    if (!tokens[i].includes('=')) {
+      cmdIndex = i;
+      break;
+    }
+  }
+  const baseCmd = path.basename(tokens[cmdIndex]);
+  if (!SEARCH_COMMANDS.has(baseCmd) || baseCmd === 'find') return null;
+
+  let flagsWithValues;
+  if (baseCmd === 'rg') flagsWithValues = RG_FLAGS_WITH_VALUES;
+  else if (baseCmd === 'ag' || baseCmd === 'ack') flagsWithValues = AG_ACK_FLAGS_WITH_VALUES;
+  else flagsWithValues = GREP_FLAGS_WITH_VALUES;
+
+  let skipNext = false;
+  for (let i = cmdIndex + 1; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+    if (token.startsWith('-')) {
+      if (token === '-e' && i + 1 < tokens.length) return routePattern(tokens[i + 1]);
+      if (flagsWithValues.has(token)) skipNext = true;
+      continue;
+    }
+    // First bare (non-flag) argument is the pattern; the rest are paths.
+    return routePattern(token);
+  }
+  return null;
+}
+
 /**
  * Extract pattern from grep/rg/ag/ack commands.
  * Pattern is typically the first non-flag, non-flag-value argument.
@@ -929,6 +1068,117 @@ function runNoodlSearch(query, cwd) {
 }
 
 /**
+ * Symbol context for a bare identifier — where it is defined, who calls it,
+ * what it calls. The route for "the agent already knows the symbol name": `rg`
+ * answers where the TEXT occurs; the graph answers where the DEFINITION is and
+ * what surrounds it.
+ */
+function runNoodlDef(symbol, cwd) {
+  let resolvedCwd = cwd;
+  try {
+    resolvedCwd = fs.realpathSync(cwd);
+  } catch {
+    // Fall back to the raw cwd (matches runNoodlSearch).
+  }
+  const startTime = Date.now();
+  try {
+    const result = execFileSync(
+      NOODL_PATH,
+      ['def', symbol, '--box', resolvedCwd],
+      { encoding: 'utf-8', timeout: SEARCH_TIMEOUT_MS, stdio: ['pipe', 'pipe', 'pipe'] }
+    );
+    debug('Def succeeded:', { resultLength: result.length, elapsedMs: Date.now() - startTime });
+    return { success: true, result, elapsed: Date.now() - startTime };
+  } catch (error) {
+    debug('Def failed:', (error.stderr || error.message || '').slice(0, 200));
+    return { success: false, elapsed: Date.now() - startTime };
+  }
+}
+
+// The agent-facing `def` digest renders every non-empty edge category, largest
+// first, from this label table — not an allowlist. `LanceStorage` has zero
+// `calls` and many `uses`; an allowlist of "interesting" categories would
+// render nothing at all for it.
+const DEF_EDGE_LABELS = {
+  incoming: {
+    calls: 'callers', uses: 'used by', imports: 'imported by',
+    implements: 'implementors', extends: 'subclasses', contains: 'contained by',
+    external_calls: 'external callers', external_imports: 'external importers',
+    external_extends: 'external subclasses', external_implements: 'external implementors',
+  },
+  outgoing: {
+    calls: 'calls', uses: 'uses', imports: 'imports',
+    implements: 'implements', extends: 'extends', contains: 'contains',
+    external_calls: 'calls (external)', external_imports: 'imports (external)',
+    external_extends: 'extends (external)', external_implements: 'implements (external)',
+  },
+};
+
+const DEF_MAX_EDGES_PER_CATEGORY = 8;
+
+/**
+ * Render a `noodl def` result as the agent digest: the definition site, the
+ * first signature line, and the call surface. An ambiguous lookup lists its
+ * candidates so the agent can disambiguate. Returns null when there is nothing
+ * to deliver — the caller's signal to inject nothing.
+ *
+ * `noodl def` interns edge file paths: an edge's `file` is an index into the
+ * top-level `files` array, not a path.
+ */
+function formatDefContext(symbol, resultText) {
+  let data;
+  try {
+    data = JSON.parse(resultText);
+  } catch {
+    return null;
+  }
+
+  if (data.status === 'ambiguous') {
+    const candidates = Array.isArray(data.candidates) ? data.candidates : [];
+    if (candidates.length === 0) return null;
+    const lines = candidates
+      .slice(0, DEF_MAX_EDGES_PER_CATEGORY)
+      .map((c) => `${c.file_path}:${c.line} · ${c.name} · ${c.kind}`);
+    return `Noodlbox: "${symbol}" is ambiguous (${candidates.length} candidates):\n${lines.join('\n')}`;
+  }
+
+  const detail = data.symbol;
+  if (!detail || typeof detail.file_path !== 'string') return null;
+
+  const files = Array.isArray(data.files) ? data.files : [];
+  const lines = [`${detail.file_path}:${detail.start_line} · ${detail.name} · ${detail.kind}`];
+  if (detail.signature) {
+    lines.push(detail.signature.split('\n')[0].trimEnd());
+  }
+
+  const categories = [];
+  for (const direction of ['incoming', 'outgoing']) {
+    const group = data[direction];
+    if (!group || typeof group !== 'object') continue;
+    for (const [name, edges] of Object.entries(group)) {
+      if (!Array.isArray(edges) || edges.length === 0) continue;
+      const label = (DEF_EDGE_LABELS[direction] && DEF_EDGE_LABELS[direction][name])
+        || `${direction} ${name}`;
+      categories.push([label, edges]);
+    }
+  }
+  categories.sort((a, b) => b[1].length - a[1].length);
+
+  for (const [label, edges] of categories) {
+    lines.push(`${label} (${edges.length}):`);
+    for (const edge of edges.slice(0, DEF_MAX_EDGES_PER_CATEGORY)) {
+      const path = typeof edge.file === 'number' ? files[edge.file] : edge.file_path;
+      const basename = (path || '?').split('/').pop() || path || '?';
+      lines.push(`  ${basename}:${edge.line} · ${edge.name}`);
+    }
+    const omitted = edges.length - DEF_MAX_EDGES_PER_CATEGORY;
+    if (omitted > 0) lines.push(`  (+${omitted} more)`);
+  }
+
+  return `Noodlbox definition of "${symbol}":\n${lines.join('\n')}`;
+}
+
+/**
  * List available repositories.
  */
 function listRepositories(timeout = 10000) {
@@ -963,7 +1213,14 @@ module.exports = {
   extractQueryFromGlob,
   extractQueryFromGrep,
   extractQueryFromBash,
+  isBareIdentifier,
+  looksLikeProse,
+  routePattern,
+  routeGrepPattern,
+  routeBashCommand,
   runNoodlSearch,
+  runNoodlDef,
+  formatDefContext,
   listRepositories,
   parseSearchResults,
   formatSearchMessage,

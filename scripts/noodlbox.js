@@ -4,7 +4,7 @@
  *
  * Unified hook handler for Claude Code events:
  * 1. SessionStart - Lists available repositories on fresh session start
- * 2. PreToolUse (Glob/Grep/Bash) - Augments with semantic search
+ * 2. PreToolUse (Grep/Bash) - Augments with graph def/search by pattern shape
  * 3. PostToolUse (query_with_context) - Formats MCP results for humans
  */
 
@@ -55,20 +55,6 @@ function injectVerifyDigest(cwd, sessionId, channel, prefix) {
       additionalContext: prefix + audit.result
     }
   }));
-}
-
-/**
- * Extract search query from tool input
- */
-function extractQueryFromTool(toolName, toolInput) {
-  if (toolName === 'Glob') {
-    return lib.extractQueryFromGlob(toolInput.pattern || '');
-  } else if (toolName === 'Grep') {
-    return lib.extractQueryFromGrep(toolInput.pattern || '');
-  } else if (toolName === 'Bash') {
-    return lib.extractQueryFromBash(toolInput.command || '');
-  }
-  return null;
 }
 
 /**
@@ -144,7 +130,7 @@ function handleSessionStart(input) {
 }
 
 /**
- * PreToolUse handler - intercepts Glob/Grep/Bash for semantic search
+ * PreToolUse handler - routes Grep/Bash patterns to noodl def/search by shape
  * Only runs for indexed repos - exits immediately otherwise.
  */
 function handlePreToolUse(input) {
@@ -211,39 +197,56 @@ function handlePreToolUse(input) {
     return;
   }
 
-  // Only intercept Glob/Grep/Bash
-  if (toolName !== 'Glob' && toolName !== 'Grep' && toolName !== 'Bash') {
+  // Only intercept Grep/Bash. Glob is excluded by construction: its patterns
+  // are filename globs — path lookups no graph query can improve on.
+  if (toolName !== 'Grep' && toolName !== 'Bash') {
     lib.debug('Not a search tool, allowing');
     return;
   }
 
-  const query = extractQueryFromTool(toolName, toolInput);
-  lib.debug('Extracted query:', query);
+  // Route by pattern SHAPE, never by mining a query out of it. A bare
+  // identifier the agent already knows goes to `noodl def`; a prose question
+  // goes to `noodl search`; a regex/path/glob runs nothing (grep answers it
+  // exactly).
+  const route = toolName === 'Grep'
+    ? lib.routeGrepPattern(toolInput.pattern || '')
+    : lib.routeBashCommand(toolInput.command || '');
 
-  if (!query || query.length < 3) {
-    lib.debug('No meaningful query, allowing builtin');
+  if (!route) {
+    lib.debug('Pattern earns no graph answer, allowing builtin');
+    return;
+  }
+  lib.debug(`Routing ${route.verb}:`, route.term);
+
+  if (route.verb === 'def') {
+    const defResult = lib.runNoodlDef(route.term, cwd);
+    if (!defResult.success) return; // fail-open: empty output = allow
+    const digest = lib.formatDefContext(route.term, defResult.result);
+    if (!digest) return; // located nothing → inject nothing
+    console.log(JSON.stringify({
+      systemMessage: `\n${BRAND} ${digest}`,
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'allow',
+        additionalContext: digest,
+      },
+    }));
     return;
   }
 
-  // Run semantic search
-  lib.debug(`Semantic search: "${query}"`);
-  const searchResult = lib.runNoodlSearch(query, cwd);
-
+  // route.verb === 'search'
+  const searchResult = lib.runNoodlSearch(route.term, cwd);
   if (searchResult.success) {
     lib.debug(`Found results in ${searchResult.elapsed}ms`);
-
-    // Parse results for rich user message
     const searchInfo = lib.parseSearchResults(searchResult.result);
-    const userMessage = lib.formatSearchMessage(query, searchInfo, searchResult.elapsed);
-
-    // Output Claude format
+    const userMessage = lib.formatSearchMessage(route.term, searchInfo, searchResult.elapsed);
     console.log(JSON.stringify({
       systemMessage: `\n${BRAND} ${userMessage}`,
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'allow',
-        additionalContext: `Noodlbox search for "${query}":\n${searchResult.result}`
-      }
+        additionalContext: `Noodlbox search for "${route.term}":\n${searchResult.result}`,
+      },
     }));
   }
   // On failure, empty output = allow fallback
