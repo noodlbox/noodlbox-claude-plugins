@@ -98,6 +98,19 @@ function emptyInfo() {
 }
 
 /**
+ * Whether the query matched this row DIRECTLY, rather than reaching it by
+ * workflow expansion.
+ *
+ * Lives under `metadata` because that is where `SymbolInfo` puts it. Reading it
+ * off the row's top level — as this used to — always yielded `undefined`, so
+ * `info.ftsMatches` was permanently empty and no search hit was ever
+ * highlighted in the display.
+ */
+function isFtsMatch(row) {
+  return row && row.metadata ? row.metadata.is_fts_match === true : false;
+}
+
+/**
  * Parse a context-search result into { flows, definitions, documents, ftsMatches }.
  *
  * Both live producers share the top-level shape
@@ -123,7 +136,7 @@ function parseContextResult(data) {
       if (!symbolsByWorkflow.has(workflowId)) symbolsByWorkflow.set(workflowId, []);
       symbolsByWorkflow.get(workflowId).push(sym);
     }
-    if (sym.is_fts_match && sym.name) info.ftsMatches.add(sym.name);
+    if (isFtsMatch(sym) && sym.name) info.ftsMatches.add(sym.name);
   }
 
   // Build entry-point → chain flows from each workflow's symbols.
@@ -160,7 +173,7 @@ function parseContextResult(data) {
     if (def.name && def.name.length > 2 && !seenDefs.has(def.name)) {
       seenDefs.add(def.name);
       info.definitions.push(def.name);
-      if (def.is_fts_match) info.ftsMatches.add(def.name);
+      if (isFtsMatch(def)) info.ftsMatches.add(def.name);
     }
   }
 
